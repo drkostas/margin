@@ -116,7 +116,8 @@ def main(argv: list[str] | None = None) -> int:
 
         def sync_pass():
             for repo, r in sync_all():
-                print(f"sync: {r.action} {repo}/{r.path}", flush=True)
+                print(f"sync: {r.action} {repo}/{r.path}" + (f"  ({r.detail})" if r.detail else ""),
+                      flush=True)
 
         serve(inbox, sync_pass)
         return 0

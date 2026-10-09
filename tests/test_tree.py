@@ -72,3 +72,12 @@ def test_excluded_folders_are_not_walked(tmp_path, monkeypatch):
              exclude=["plugins/**", "projects/*/*-session/**"])
     assert files(r) == ["projects/p/memory/m.md", "skills/a/SKILL.md"]
     assert not any("plugins" in d or "session" in d for d in seen)
+
+
+def test_long_titles_are_cut_to_what_outline_accepts():
+    from margin.sync import TITLE_MAX, clamp_title
+    long = "Acute to chronic workload ratio " * 6
+    t = clamp_title(long)
+    assert len(t) <= TITLE_MAX and t.endswith("…") and not t[:-1].endswith(" ")
+    assert clamp_title("Short title") == "Short title"
+    assert len(clamp_title("x" * 300)) == TITLE_MAX
