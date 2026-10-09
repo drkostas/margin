@@ -2,6 +2,7 @@
 
 ## 0.2.0
 
+- Excluded folders are skipped during the walk, and non-markdown names are skipped before pattern matching, so a large root costs little.
 - `margin link FILE...` publishes files at once and prints a Markdown link to each, for an agent to hand to the person.
 - `margin setup-claude` links the skill, registers Outline's MCP with the key read at connect time, and denies its destructive tools.
 - One writer per repository across processes, so a `margin link` and the serve loop never create the same document twice.
