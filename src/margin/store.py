@@ -5,6 +5,8 @@ last sync, which is exactly what is needed to tell "only the repo changed" from 
 """
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import sqlite3
 import threading
 import time
@@ -71,6 +73,7 @@ class _Rows:
 class Store:
     def __init__(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
+        self.path = path
         # One connection shared by the webhook thread and the main loop, so every statement
         # goes through one lock.
         self._db = sqlite3.connect(str(path), isolation_level=None, timeout=30,
@@ -134,3 +137,16 @@ class Store:
     def put(self, k: str, v: str):
         self.db.execute("INSERT INTO kv(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v",
                         (k, v))
+
+
+@contextlib.contextmanager
+def repo_lock(store: "Store", repo: str):
+    """One writer per repo across processes: the serve loop and a chat's `margin link` both sync,
+    and two passes that both see "no document yet" would each create one."""
+    lock = store.path.parent / f"{store.path.stem}.{repo}.lock"
+    with open(lock, "w") as fh:
+        fcntl.flock(fh, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(fh, fcntl.LOCK_UN)

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "margin"
-version = "0.1.0"
+version = "0.2.0"
 description = "Publish a repo's markdown to a self-hosted Outline, keep comments anchored, and bring each new comment back to an AI agent in batches"
 readme = "README.md"
 requires-python = ">=3.11"

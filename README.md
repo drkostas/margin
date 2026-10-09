@@ -64,6 +64,8 @@ margin status                # documents that need attention, comments waiting
 margin reply <comment-id> "Changed to five minutes, see the Lifetime section."
 margin resolve <comment-id>
 margin thread <comment-id>
+margin link docs/plan.md     # publish these files now and print a Markdown link to each
+margin setup-claude          # link the skill, register Outline's MCP, deny its destructive tools
 ```
 
 A batch looks like this.

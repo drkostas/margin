@@ -7,6 +7,8 @@
     margin reply COMMENT_ID TEXT       answer in the comment's thread, as the configured user
     margin resolve COMMENT_ID          mark the thread resolved
     margin thread COMMENT_ID           print a whole thread with its quoted text
+    margin link FILE...                publish these files now and print a Markdown link to each
+    margin setup-claude                install the skill, Outline's MCP and its tool denials
 """
 from __future__ import annotations
 
@@ -16,7 +18,7 @@ import sys
 import time
 
 from . import batch
-from .config import DEFAULT_PATH, load
+from .config import DEFAULT_PATH, load, repo_of
 from .inbox import EVENTS, Inbox, serve
 from .outline import Outline, comment_text, pin_host
 from .store import Store
@@ -68,10 +70,18 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("comment_id")
     p = sub.add_parser("thread")
     p.add_argument("comment_id")
+    p = sub.add_parser("link")
+    p.add_argument("files", nargs="+")
+    sub.add_parser("setup-claude")
     a = ap.parse_args(argv)
 
     from pathlib import Path
     cfg = load(Path(a.config).expanduser())
+    if a.cmd == "setup-claude":
+        from .claude import setup
+        for line in setup(cfg):
+            print(line)
+        return 0
     o = connect(cfg)
     store = Store(cfg.state)
 
@@ -137,6 +147,30 @@ def main(argv: list[str] | None = None) -> int:
         o.resolve(c.get("parentCommentId") or c["id"])
         print("resolved")
         return 0
+
+    if a.cmd == "link":
+        from .outline import doc_url
+        by_repo: dict = {}
+        bad = 0
+        for f in a.files:
+            hit = repo_of(cfg, Path(f))
+            if not hit:
+                print(f"not published: {f} is in no configured repo. Put it in a repo margin "
+                      "publishes, or add its repo to the config.", file=sys.stderr)
+                bad = 1
+                continue
+            by_repo.setdefault(hit[0].name, (hit[0], []))[1].append(hit[1])
+        for name, (repo, rels) in by_repo.items():
+            got = dict(Syncer(o, store, repo).publish(rels))
+            for rel in rels:
+                d = got.get(rel)
+                if d:
+                    print(f"[{d['title']}]({doc_url(cfg.url, d)})")
+                else:
+                    print(f"not published: {name}/{rel} is excluded by the repo's include or "
+                          "exclude patterns, or is not markdown", file=sys.stderr)
+                    bad = 1
+        return bad
 
     if a.cmd == "thread":
         root, rows = thread_of(o, a.comment_id)
