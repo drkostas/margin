@@ -17,8 +17,9 @@
     cap_seconds = 900
 
     [notify]
-    command = ["my-notifier", "{route}"]     # gets the batch as JSON on stdin; {text} is the
-    cwd = "~/somewhere"                       # rendered message. cwd is optional.
+    command = ["my-notifier", "{route}"]     # gets the batch as JSON on stdin. {text} is the
+    cwd = "~/somewhere"                       # rendered message, {repo} and {repo_path} name the
+                                              # repo of the batch. cwd is optional.
 
     [[repo]]
     name = "drlab"                            # becomes the Outline collection

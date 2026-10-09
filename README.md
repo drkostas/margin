@@ -41,7 +41,7 @@ quiet_seconds = 180
 cap_seconds = 900
 
 [notify]
-command = ["my-notifier", "{route}"]     # receives each batch as JSON on stdin
+command = ["my-notifier", "{route}"]     # receives each batch as JSON on stdin; {text}, {repo} and {repo_path} are filled in
 
 [[repo]]
 name = "my-project"                      # the Outline collection

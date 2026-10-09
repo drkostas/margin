@@ -27,3 +27,18 @@ routes = { "docs" = "d" }
     c = load(p)
     assert c.notify_cwd.as_posix() == "/tmp" and c.repos[0].route_for("docs/x.md") == "d"
     assert c.repos[0].route_for("x.md") == "a"
+
+
+def test_notify_substitutes_repo_and_path(tmp_path):
+    import json
+    from margin.inbox import Inbox
+    out = tmp_path / "argv.json"
+    cfg = type("C", (), {})()
+    cfg.notify_command = ["python3", "-c",
+                          f"import sys,json; json.dump(sys.argv[1:], open({str(out)!r},'w'))",
+                          "{route}", "{repo}", "{repo_path}", "{text}"]
+    cfg.notify_cwd = None
+    inbox = Inbox.__new__(Inbox)
+    inbox.cfg = cfg
+    assert inbox.notify("r", {"text": "hello", "repo": "drlab", "repo_path": "/x/drlab"})
+    assert json.loads(out.read_text()) == ["r", "drlab", "/x/drlab", "hello"]
