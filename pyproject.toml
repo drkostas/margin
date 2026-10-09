@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "margin"
+version = "0.1.0"
+description = "Publish a repo's markdown to a self-hosted Outline, keep comments anchored, and bring each new comment back to an AI agent in batches"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "Konstantinos Georgiou" }]
+dependencies = []
+keywords = ["outline", "markdown", "comments", "claude", "claude-code", "agents", "documentation"]
+classifiers = ["Programming Language :: Python :: 3", "Topic :: Documentation", "Topic :: Utilities"]
+
+[project.urls]
+Homepage = "https://github.com/drkostas/margin"
+
+[project.scripts]
+margin = "margin.cli:main"
+
+[project.optional-dependencies]
+test = ["pytest>=8"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+margin = ["skills/*/SKILL.md"]

@@ -1,0 +1,26 @@
+issuer: https://login.example.com/dex
+storage:
+  type: sqlite3
+  config:
+    file: /var/dex/dex.db
+web:
+  http: 0.0.0.0:5556
+oauth2:
+  skipApprovalScreen: true
+staticClients:
+  - id: outline
+    name: Outline
+    secret: CHANGE-ME
+    redirectURIs:
+      - https://docs.example.com/auth/oidc.callback
+enablePasswordDB: true
+# Two accounts: you, and the agent. Hashes are bcrypt: htpasswd -bnBC 10 "" 'password' | tr -d ':\n'
+staticPasswords:
+  - email: you@example.com
+    username: You
+    userID: 00000000-0000-4000-8000-000000000001
+    hash: "$2y$10$..."
+  - email: agent@example.com
+    username: Claude
+    userID: 00000000-0000-4000-8000-000000000002
+    hash: "$2y$10$..."

@@ -1,0 +1,32 @@
+# Outline, Redis and Dex (a small OpenID Connect provider with local accounts), for margin.
+# Bind everything to the loopback and put a TLS proxy in front (Tailscale serve, Caddy, nginx).
+# Fill outline.env and dex.yaml from outline.env.example and dex.yaml.example first.
+name: outline
+
+services:
+  outline:
+    image: outlinewiki/outline:1.10.1
+    restart: unless-stopped
+    env_file: ./outline.env
+    ports:
+      - "127.0.0.1:3100:3000"
+    volumes:
+      - ./data/outline:/var/lib/outline/data
+    depends_on: [redis, dex]
+
+  redis:
+    image: redis:7.4-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - ./data/redis:/data
+
+  dex:
+    image: ghcr.io/dexidp/dex:v2.46.0
+    restart: unless-stopped
+    command: ["dex", "serve", "/etc/dex/config.yaml"]
+    ports:
+      - "127.0.0.1:5556:5556"
+    volumes:
+      - ./dex.yaml:/etc/dex/config.yaml:ro
+      - ./data/dex:/var/dex
