@@ -42,7 +42,9 @@ DEFAULT_PATH = Path(os.environ.get("MARGIN_CONFIG", "~/.config/margin/config.tom
 DEFAULT_STATE = Path(os.environ.get("MARGIN_STATE", "~/.local/state/margin/margin.db")).expanduser()
 
 ALWAYS_EXCLUDE = ["**/.git/**", "**/node_modules/**", "**/.venv/**", "**/venv/**",
-                  "**/__pycache__/**", "**/.playwright-mcp/**", "**/dist/**", "**/build/**"]
+                  "**/__pycache__/**", "**/.playwright-mcp/**", "**/dist/**", "**/build/**",
+                  "**/.pytest_cache/**", "**/.mypy_cache/**", "**/.ruff_cache/**", "**/.tox/**",
+                  "**/*.egg-info/**"]
 
 
 @dataclass

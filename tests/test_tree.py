@@ -23,6 +23,8 @@ def test_files_reads_the_working_tree_and_skips_junk(tmp_path: Path):
     (tmp_path / "skip").mkdir()
     (tmp_path / "skip" / "s.md").write_text("x")
     (tmp_path / "top.md").write_text("x")
+    (tmp_path / ".pytest_cache").mkdir()
+    (tmp_path / ".pytest_cache" / "README.md").write_text("x")
     r = Repo("t", tmp_path, exclude=["skip/**"])
     assert files(r) == ["docs/a.md", "top.md"]
 
