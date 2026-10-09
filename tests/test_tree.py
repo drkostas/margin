@@ -47,3 +47,28 @@ def test_store_is_usable_from_another_thread(tmp_path):
     t.join()
     assert not errors and s.get("k") == "v" and s.add_comment(
         {"id": "c", "document_id": "d", "created_at": "t", "via": "poll"}) is False
+
+
+def test_excluded_folders_are_not_walked(tmp_path, monkeypatch):
+    import os
+    (tmp_path / "skills" / "a").mkdir(parents=True)
+    (tmp_path / "skills" / "a" / "SKILL.md").write_text("x")
+    (tmp_path / "projects" / "p" / "memory").mkdir(parents=True)
+    (tmp_path / "projects" / "p" / "memory" / "m.md").write_text("x")
+    (tmp_path / "projects" / "p" / "1234abcd-session").mkdir()
+    (tmp_path / "projects" / "p" / "1234abcd-session" / "big.md").write_text("x")
+    (tmp_path / "plugins" / "cache").mkdir(parents=True)
+    (tmp_path / "plugins" / "cache" / "r.md").write_text("x")
+    seen = []
+    real = os.walk
+
+    def spy(top, *a, **k):
+        for d, dn, fn in real(top, *a, **k):
+            seen.append(d)
+            yield d, dn, fn
+
+    monkeypatch.setattr(os, "walk", spy)
+    r = Repo("c", tmp_path, include=["skills/**/*.md", "projects/*/memory/*.md"],
+             exclude=["plugins/**", "projects/*/*-session/**"])
+    assert files(r) == ["projects/p/memory/m.md", "skills/a/SKILL.md"]
+    assert not any("plugins" in d or "session" in d for d in seen)

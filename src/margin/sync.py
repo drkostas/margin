@@ -53,15 +53,26 @@ def _match(rel: str, patterns: list[str]) -> bool:
 
 def files(repo: Repo) -> list[str]:
     """Repo-relative paths of every markdown file margin publishes. Working tree, not git, so
-    untracked and git-ignored docs are included on purpose."""
+    untracked and git-ignored docs are included on purpose.
+
+    Excluded folders are skipped during the walk, not filtered afterwards, so a root that holds
+    tens of thousands of other files (a home config folder full of transcripts) costs nothing."""
+    import os
+    excludes = ALWAYS_EXCLUDE + repo.exclude
+    md_only = all(p.lower().endswith(".md") for p in repo.include)
     out = []
-    for f in sorted(repo.path.rglob("*")):
-        if not f.is_file():
-            continue
-        rel = f.relative_to(repo.path).as_posix()
-        if _match(rel, repo.include) and not _match(rel, ALWAYS_EXCLUDE + repo.exclude):
-            out.append(rel)
-    return out
+    for dirpath, dirnames, filenames in os.walk(repo.path):
+        base = Path(dirpath).relative_to(repo.path).as_posix()
+        base = "" if base == "." else base + "/"
+        # a folder is skipped when anything inside it would be excluded
+        dirnames[:] = sorted(d for d in dirnames if not _match(f"{base}{d}/x", excludes))
+        for name in sorted(filenames):
+            if md_only and not name.lower().endswith(".md"):
+                continue          # cheap: most of a big folder is not markdown at all
+            rel = base + name
+            if _match(rel, repo.include) and not _match(rel, excludes):
+                out.append(rel)
+    return sorted(out)
 
 
 def tree(paths: list[str]) -> list[tuple[str, str | None]]:
