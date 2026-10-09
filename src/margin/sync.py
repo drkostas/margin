@@ -34,6 +34,18 @@ class Result:
     detail: str = ""
 
 
+TITLE_MAX = 100     # Outline refuses a longer title with a 400
+
+
+def clamp_title(title: str, limit: int = TITLE_MAX) -> str:
+    """A title Outline accepts: cut at a word boundary, with an ellipsis when it was cut."""
+    title = " ".join(title.split())
+    if len(title) <= limit:
+        return title
+    cut = title[: limit - 1].rsplit(" ", 1)[0] or title[: limit - 1]
+    return cut.rstrip(" ,.;:-") + "…"
+
+
 def split_title(text: str, fallback: str) -> tuple[str, str]:
     lines = text.lstrip("﻿").split("\n")
     i = 0
@@ -224,6 +236,7 @@ class Syncer:
         fallback = name[:-3] if name.lower().endswith(".md") else name
         text = (self.repo.path / src).read_text(errors="replace") if src else ""
         title, body = split_title(text, fallback)
+        title = clamp_title(title)
         row = self.s.doc(self.repo.name, key)
 
         if row is None:

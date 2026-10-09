@@ -2,6 +2,7 @@
 
 ## 0.2.0
 
+- Titles longer than Outline accepts (100 characters) are cut at a word boundary, and the serve log gives the reason a document failed.
 - Excluded folders are skipped during the walk, and non-markdown names are skipped before pattern matching, so a large root costs little.
 - `margin link FILE...` publishes files at once and prints a Markdown link to each, for an agent to hand to the person.
 - `margin setup-claude` links the skill, registers Outline's MCP with the key read at connect time, and denies its destructive tools.
