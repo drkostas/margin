@@ -5,6 +5,7 @@
     api_key_command = ["security", "find-generic-password", "-s", "outline-api-claude", "-w"]
     pin_ip_command = ["tailscale", "ip", "-4"]      # optional: resolve the url's host to this IP
     admin_key_command = [...]   # optional: an admin's key, used ONLY to create the webhook
+    mcp_url = "http://127.0.0.1:3100/mcp"           # optional: Outline's MCP, default <url>/mcp
 
     [intake]
     listen = "127.0.0.1:8771"
@@ -80,6 +81,7 @@ class Config:
     cap_seconds: int
     notify_command: list[str] | None
     notify_cwd: Path | None
+    mcp_url: str | None
     repos: list[Repo]
     state: Path
 
@@ -116,5 +118,18 @@ def load(path: Path = DEFAULT_PATH) -> Config:
         secret_command=i.get("secret_command"), poll_seconds=int(i.get("poll_seconds", 600)),
         quiet_seconds=int(b.get("quiet_seconds", 180)), cap_seconds=int(b.get("cap_seconds", 900)),
         notify_command=n.get("command"),
-        notify_cwd=Path(n["cwd"]).expanduser() if n.get("cwd") else None, repos=repos,
+        notify_cwd=Path(n["cwd"]).expanduser() if n.get("cwd") else None,
+        mcp_url=o.get("mcp_url"), repos=repos,
         state=Path(raw.get("state", DEFAULT_STATE)).expanduser())
+
+
+def repo_of(cfg: Config, file: Path) -> tuple[Repo, str] | None:
+    """The configured repo a file lives in, and its repo-relative path. The deepest repo wins."""
+    f = file.expanduser().resolve()
+    best = None
+    for r in cfg.repos:
+        root = r.path.resolve()
+        if f == root or root in f.parents:
+            if best is None or len(root.parts) > len(best[0].path.resolve().parts):
+                best = (r, f.relative_to(root).as_posix())
+    return best

@@ -24,7 +24,7 @@ from pathlib import Path, PurePosixPath
 from .config import ALWAYS_EXCLUDE, Repo
 from .outline import Outline, OutlineError
 from .patches import CannotPatch, apply, plan
-from .store import Store
+from .store import Store, repo_lock
 
 
 @dataclass
@@ -135,6 +135,32 @@ class Syncer:
 
     # ---- one pass
     def run(self) -> list[Result]:
+        with repo_lock(self.s, self.repo.name):
+            return self._run()
+
+    def publish(self, rels: list[str]) -> list[tuple[str, dict]]:
+        """Publish just these repo-relative files (and the folders above them) now, and return
+        (path, document) for each, so a caller can hand out links without waiting for a pass."""
+        out = []
+        with repo_lock(self.s, self.repo.name):
+            wanted = set()
+            for rel in rels:
+                parts = rel.split("/")
+                wanted.update("/".join(parts[:d]) for d in range(1, len(parts)))
+                parent, name = rel.rpartition("/")[0], rel.rpartition("/")[2]
+                wanted.add(parent if parent and name.lower() == "readme.md" else rel)
+            for key, src in tree(files(self.repo)):
+                if key in wanted:
+                    self.one(key, src)
+            for rel in rels:
+                parent, name = rel.rpartition("/")[0], rel.rpartition("/")[2]
+                key = parent if parent and name.lower() == "readme.md" else rel
+                row = self.s.doc(self.repo.name, key)
+                if row:
+                    out.append((rel, self.o.document(row["doc_id"])))
+        return out
+
+    def _run(self) -> list[Result]:
         paths = files(self.repo)
         results = []
         seen = set()
