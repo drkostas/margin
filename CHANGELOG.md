@@ -7,3 +7,4 @@
 - `margin serve` receives signed comment webhooks, runs a catch-up poll, and delivers comments in batches after a quiet period.
 - `margin reply`, `resolve`, `thread` and `status`.
 - Comments can be routed by path prefix, and the notifier command can take the rendered message as `{text}` and run in a chosen folder.
+- The notifier command can also take `{repo}` and `{repo_path}`.

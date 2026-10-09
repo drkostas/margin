@@ -145,7 +145,10 @@ class Inbox:
                 "\nAnswer each one in its thread: `margin reply <comment-id> \"...\"`. "
                 "Change the repo file when the comment asks for a change, then `margin sync`. "
                 "`margin resolve <comment-id>` once it is settled.")
-        return {"route": route, "comments": items, "text": text}
+        first = self.s.doc_by_id(rows[0]["document_id"]) if rows else None
+        repo = self.repos.get(first["repo"]) if first else None
+        return {"route": route, "comments": items, "text": text,
+                "repo": repo.name if repo else "", "repo_path": str(repo.path) if repo else ""}
 
     def deliver(self, now: float | None = None) -> list[str]:
         now = time.time() if now is None else now
@@ -166,8 +169,13 @@ class Inbox:
         if not self.cfg.notify_command:
             print(msg["text"], flush=True)
             return True
-        argv = [a.replace("{route}", route).replace("{text}", msg["text"])
-                for a in self.cfg.notify_command]
+        subs = {"{route}": route, "{text}": msg["text"], "{repo}": msg.get("repo", ""),
+                "{repo_path}": msg.get("repo_path", "")}
+        argv = []
+        for a in self.cfg.notify_command:
+            for k, v in subs.items():
+                a = a.replace(k, v)
+            argv.append(a)
         p = subprocess.run(argv, input=json.dumps(msg), text=True, capture_output=True,
                            cwd=self.cfg.notify_cwd)
         if p.returncode != 0:
