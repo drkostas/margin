@@ -17,7 +17,8 @@
     cap_seconds = 900
 
     [notify]
-    command = ["my-notifier", "{route}"]     # gets the batch as JSON on stdin
+    command = ["my-notifier", "{route}"]     # gets the batch as JSON on stdin; {text} is the
+    cwd = "~/somewhere"                       # rendered message. cwd is optional.
 
     [[repo]]
     name = "drlab"                            # becomes the Outline collection
@@ -25,6 +26,7 @@
     include = ["**/*.md"]
     exclude = ["**/node_modules/**"]
     route = "drlab"                           # passed to the notifier as {route}
+    routes = { "docs/chats/vision.md" = "vision" }   # optional: by path prefix, longest wins
 
 Secrets are never written in the file. Each one is the output of a command.
 """
@@ -50,6 +52,15 @@ class Repo:
     include: list[str] = field(default_factory=lambda: ["**/*.md"])
     exclude: list[str] = field(default_factory=list)
     route: str = ""
+    routes: dict[str, str] = field(default_factory=dict)
+
+    def route_for(self, path: str) -> str:
+        """The route for a repo-relative path: the longest matching prefix, else the repo's."""
+        best = ""
+        for prefix in self.routes:
+            if (path == prefix or path.startswith(prefix.rstrip("/") + "/")) and len(prefix) > len(best):
+                best = prefix
+        return self.routes[best] if best else self.route
 
 
 @dataclass
@@ -65,6 +76,7 @@ class Config:
     quiet_seconds: int
     cap_seconds: int
     notify_command: list[str] | None
+    notify_cwd: Path | None
     repos: list[Repo]
     state: Path
 
@@ -89,7 +101,7 @@ def load(path: Path = DEFAULT_PATH) -> Config:
     o, i, b, n = (raw.get(k, {}) for k in ("outline", "intake", "batch", "notify"))
     repos = [Repo(name=r["name"], path=Path(r["path"]).expanduser(),
                   include=r.get("include", ["**/*.md"]), exclude=r.get("exclude", []),
-                  route=r.get("route", r["name"]))
+                  route=r.get("route", r["name"]), routes=r.get("routes", {}))
              for r in raw.get("repo", [])]
     names = [r.name for r in repos]
     if len(names) != len(set(names)):
@@ -100,5 +112,6 @@ def load(path: Path = DEFAULT_PATH) -> Config:
         listen=i.get("listen", "127.0.0.1:8771"), webhook_url=i.get("webhook_url", ""),
         secret_command=i.get("secret_command"), poll_seconds=int(i.get("poll_seconds", 600)),
         quiet_seconds=int(b.get("quiet_seconds", 180)), cap_seconds=int(b.get("cap_seconds", 900)),
-        notify_command=n.get("command"), repos=repos,
+        notify_command=n.get("command"),
+        notify_cwd=Path(n["cwd"]).expanduser() if n.get("cwd") else None, repos=repos,
         state=Path(raw.get("state", DEFAULT_STATE)).expanduser())

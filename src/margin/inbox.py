@@ -49,13 +49,14 @@ class Inbox:
     def __init__(self, cfg: Config, outline: Outline, store: Store):
         self.cfg, self.o, self.s = cfg, outline, store
         self.agent_id = outline.me()["id"]
-        self.routes = {r.name: r.route for r in cfg.repos}
+        self.repos = {r.name: r for r in cfg.repos}
         self.lock = threading.Lock()
 
     # ---- recording
     def route_of(self, document_id: str) -> str | None:
         row = self.s.doc_by_id(document_id)
-        return self.routes.get(row["repo"]) if row else None
+        repo = self.repos.get(row["repo"]) if row else None
+        return repo.route_for(row["path"]) if repo else None
 
     def record(self, c: dict, via: str) -> bool:
         if c.get("createdById") == self.agent_id:
@@ -165,8 +166,10 @@ class Inbox:
         if not self.cfg.notify_command:
             print(msg["text"], flush=True)
             return True
-        argv = [a.replace("{route}", route) for a in self.cfg.notify_command]
-        p = subprocess.run(argv, input=json.dumps(msg), text=True, capture_output=True)
+        argv = [a.replace("{route}", route).replace("{text}", msg["text"])
+                for a in self.cfg.notify_command]
+        p = subprocess.run(argv, input=json.dumps(msg), text=True, capture_output=True,
+                           cwd=self.cfg.notify_cwd)
         if p.returncode != 0:
             print(f"notifier failed for {route} ({p.returncode}): {p.stderr.strip()[:300]}",
                   file=sys.stderr, flush=True)
