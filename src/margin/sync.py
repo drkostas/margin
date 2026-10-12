@@ -182,21 +182,32 @@ class Syncer:
         (path, document) for each, so a caller can hand out links without waiting for a pass."""
         return [(rel, doc) for rel, doc, _status, _detail in self.publish_status(rels)]
 
-    def publish_status(self, rels: list[str]) -> list[tuple[str, dict, str, str]]:
+    def publish_status(self, rels: list[str], root: Path | None = None
+                       ) -> list[tuple[str, dict, str, str]]:
         """`publish`, with each file's sync status after it ("ok", "conflict", "cannot-patch",
         "drift", "outline-edited", ...) and its detail. Only "ok" means the document now says
         what the file says; anything else means the link points at an older or different text."""
         out = []
         with repo_lock(self.s, self.repo.name):
+            if root is not None and Path(root).resolve() != self.repo.path.resolve():
+                for rel in rels:                          # linked from a worktree: pin them
+                    parent, name = rel.rpartition("/")[0], rel.rpartition("/")[2]
+                    self.pin(parent if parent and name.lower() == "readme.md" else rel,
+                             Path(root) / rel)
             wanted = set()
             for rel in rels:
                 parts = rel.split("/")
                 wanted.update("/".join(parts[:d]) for d in range(1, len(parts)))
                 parent, name = rel.rpartition("/")[0], rel.rpartition("/")[2]
                 wanted.add(parent if parent and name.lower() == "readme.md" else rel)
+            done = set()
             for key, src in tree(files(self.repo)):
                 if key in wanted:
                     self.one(key, src)
+                    done.add(key)
+            for key in sorted((wanted - done) & set(self.pins())):   # only in a worktree so far
+                if self.source(key, None) is not None:
+                    self.one(key, None)
             for rel in rels:
                 parent, name = rel.rpartition("/")[0], rel.rpartition("/")[2]
                 key = parent if parent and name.lower() == "readme.md" else rel
@@ -206,7 +217,7 @@ class Syncer:
                                 row["detail"] or ""))
         return out
 
-    def accept_file(self, rel: str) -> Result:
+    def accept_file(self, rel: str, root: Path | None = None) -> Result:
         """Let the file's side win a conflict that no person made: the document's text since the
         last sync was written only by margin's own user, and nobody has commented on it. Outline's
         current text becomes the base, so the next pass sees only the file's change and patches it
@@ -218,6 +229,8 @@ class Syncer:
             row = self.s.doc(self.repo.name, key)
             if row is None:
                 return Result(key, "refused", "it was never published; margin link publishes it")
+            if root is not None and Path(root).resolve() != self.repo.path.resolve():
+                self.pin(key, Path(root) / rel)          # the worktree's version is the file
             if row["status"] in ("ok", None):
                 return Result(key, "refused", "there is no conflict: the document matches the file")
             me = self.o.me()["id"]
@@ -249,13 +262,49 @@ class Syncer:
             # Nobody but margin wrote it and nothing is anchored in it, so the whole text may be
             # replaced, the same reason an empty document is replaced (a replace drops comment
             # anchors, and here there are none).
-            text = (self.repo.path / src).read_text(errors="replace")
+            text = (self.repo.path / self.source(key, src)).read_text(errors="replace")
             title, body = split_title(text, PurePosixPath(key).name)
             after = self.o.replace(row["doc_id"], body)["text"]
             self.s.save_doc(self.repo.name, key, row["doc_id"], row["collection_id"],
                             text, after, "ok",
                             "the file replaced the document (no person had edited it, no comments)")
             return Result(key, "patched", "replaced: no person had edited it and it had no comments")
+
+    # ---- files linked from a worktree
+    # ⚠️ EVERY CHAT WORKS IN ITS OWN GIT WORKTREE (2026-10-12), and margin read only the main
+    # folder, so a new document was published by copying it there by hand. A file linked from a
+    # worktree is PINNED: until the main folder has the same text (or the worktree file is gone),
+    # the sync pass publishes the worktree's version instead of the main folder's older one, and
+    # does not mark a file that exists only in the worktree as missing.
+    def _pin_key(self, key: str) -> str:
+        return f"pin:{self.repo.name}:{key}"
+
+    def pin(self, key: str, file: Path) -> None:
+        self.s.put(self._pin_key(key), str(Path(file).resolve()))
+
+    def pins(self) -> dict[str, Path]:
+        prefix = self._pin_key("")
+        rows = self.s.db.execute("SELECT k, v FROM kv WHERE k LIKE ?", (prefix + "%",)).fetchall()
+        return {r["k"][len(prefix):]: Path(r["v"]) for r in rows if r["v"]}
+
+    def unpin(self, key: str) -> None:
+        self.s.db.execute("DELETE FROM kv WHERE k=?", (self._pin_key(key),))
+
+    def source(self, key: str, src: str | None) -> str | None:
+        """Where `key`'s text comes from: its pinned worktree file while that differs from the main
+        folder's, else the main folder's file. A pin lifts itself once the main folder caught up or
+        the worktree file is gone."""
+        pinned = self.pins().get(key)
+        if pinned is None:
+            return src
+        if not pinned.exists():
+            self.unpin(key)
+            return src
+        main = self.repo.path / src if src else None
+        if main is not None and main.exists() and main.read_bytes() == pinned.read_bytes():
+            self.unpin(key)
+            return src
+        return str(pinned)
 
     def _run(self) -> list[Result]:
         paths = files(self.repo)
@@ -265,6 +314,14 @@ class Syncer:
             seen.add(key)
             try:
                 results.append(self.one(key, src))
+            except OutlineError as e:
+                results.append(Result(key, "error", str(e)))
+        for key in sorted(set(self.pins()) - seen):        # files so far only in a worktree
+            if self.source(key, None) is None:
+                continue          # the pin lifted and the main folder has no file: missing, below
+            seen.add(key)
+            try:
+                results.append(self.one(key, None))
             except OutlineError as e:
                 results.append(Result(key, "error", str(e)))
         for row in self.s.docs(self.repo.name):
@@ -317,6 +374,7 @@ class Syncer:
         return row["doc_id"] if row else None
 
     def one(self, key: str, src: str | None) -> Result:
+        src = self.source(key, src)
         name = PurePosixPath(key).name
         fallback = name[:-3] if name.lower().endswith(".md") else name
         text = (self.repo.path / src).read_text(errors="replace") if src else ""
