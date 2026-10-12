@@ -44,7 +44,13 @@ It publishes those files at once and prints one Markdown link per file. **Put ev
 prints in your reply to the person**, so they can open each document you wrote or changed. Use only
 links margin printed. Never build an Outline address yourself. If margin prints "not published",
 tell the person which file and why, and fix it (move the file into a published repository, or ask
-for the repository to be added to the configuration).
+for the repository to be added to the configuration). "not published: ... is conflict" (or
+`cannot-patch`, `drift`, `outline-edited`) means the document still has an older text, and `margin
+link` exits non-zero: the document is not published until the conflict is settled (below).
+
+Do not put a link or a code span inside bold text, as in `**A follow-up, [#581](url).**`. Outline
+rewrites it as `**A follow-up,** [**#581**](url)**.**`, so the document can never equal the file and
+every update of it fails. Put the link after the bold label: `**A follow-up.** [#581](url)`.
 
 ## Answering a batch of comments
 
@@ -66,6 +72,9 @@ Use `margin thread <comment-id>` to read the whole thread when a comment is a re
   comment is about.
 - Never replace a whole document, never delete or move one, and never share one publicly. Sharing
   is the person's decision. Moving a page is done by moving its file.
-- If `margin sync` or `margin link` reports `conflict` or `outline-edited`, the person changed the
-  document in Outline. Do not force your version. Tell them which document it is and ask.
+- If `margin sync` or `margin link` reports `conflict` or `outline-edited`, run
+  `margin accept-file <file>`. It lets the file win only when nobody but margin edited the
+  document since the last sync and it has no comments, and otherwise it refuses and names who
+  edited it. When it refuses, the person changed the document in Outline: do not force your
+  version, tell them which document it is and ask.
 - Say a document is published only when `margin link` printed its link in this turn.

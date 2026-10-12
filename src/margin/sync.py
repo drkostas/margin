@@ -37,6 +37,22 @@ class Result:
 TITLE_MAX = 100     # Outline refuses a longer title with a 400
 
 
+def loose(text: str) -> str:
+    """Text with only its spacing removed: blank lines between blocks and spaces at the end of a
+    line. Outline keeps an empty paragraph a patch tries to remove (a third newline), and one
+    between two list items splits the list in two, so the words match while the newlines do not."""
+    import re
+    return re.sub(r"\n+", "\n", re.sub(r"[ \t]+\n", "\n", text)).strip()
+
+
+def _epoch(stamp: str | None) -> float:
+    """Seconds since 1970 for an Outline timestamp ("2026-10-09T12:12:30.547Z"); 0 when absent."""
+    import datetime as dt
+    if not stamp:
+        return 0.0
+    return dt.datetime.fromisoformat(stamp.replace("Z", "+00:00")).timestamp()
+
+
 def clamp_title(title: str, limit: int = TITLE_MAX) -> str:
     """A title Outline accepts: cut at a word boundary, with an ellipsis when it was cut."""
     title = " ".join(title.split())
@@ -164,6 +180,12 @@ class Syncer:
     def publish(self, rels: list[str]) -> list[tuple[str, dict]]:
         """Publish just these repo-relative files (and the folders above them) now, and return
         (path, document) for each, so a caller can hand out links without waiting for a pass."""
+        return [(rel, doc) for rel, doc, _status, _detail in self.publish_status(rels)]
+
+    def publish_status(self, rels: list[str]) -> list[tuple[str, dict, str, str]]:
+        """`publish`, with each file's sync status after it ("ok", "conflict", "cannot-patch",
+        "drift", "outline-edited", ...) and its detail. Only "ok" means the document now says
+        what the file says; anything else means the link points at an older or different text."""
         out = []
         with repo_lock(self.s, self.repo.name):
             wanted = set()
@@ -180,8 +202,60 @@ class Syncer:
                 key = parent if parent and name.lower() == "readme.md" else rel
                 row = self.s.doc(self.repo.name, key)
                 if row:
-                    out.append((rel, self.o.document(row["doc_id"])))
+                    out.append((rel, self.o.document(row["doc_id"]), row["status"] or "ok",
+                                row["detail"] or ""))
         return out
+
+    def accept_file(self, rel: str) -> Result:
+        """Let the file's side win a conflict that no person made: the document's text since the
+        last sync was written only by margin's own user, and nobody has commented on it. Outline's
+        current text becomes the base, so the next pass sees only the file's change and patches it
+        in. Anything a person did refuses it, because their edit or their comment's anchor would be
+        lost; then ask them."""
+        parent, name = rel.rpartition("/")[0], rel.rpartition("/")[2]
+        key = parent if parent and name.lower() == "readme.md" else rel
+        with repo_lock(self.s, self.repo.name):
+            row = self.s.doc(self.repo.name, key)
+            if row is None:
+                return Result(key, "refused", "it was never published; margin link publishes it")
+            if row["status"] in ("ok", None):
+                return Result(key, "refused", "there is no conflict: the document matches the file")
+            me = self.o.me()["id"]
+            notes = list(self.o.comments(document_id=row["doc_id"]))
+            if notes:
+                return Result(key, "refused", f"{len(notes)} comment(s) on the document; answer them "
+                                              "first, because the file's text would move their anchors")
+            since = (row["synced_at"] or 0) - 60
+            people = set()
+            for r in self.o.paged("revisions.list", {"documentId": row["doc_id"]}):
+                who = r.get("createdBy") or {}
+                if who.get("id") != me and _epoch(r.get("createdAt")) > since:
+                    people.add(who.get("name") or who.get("id") or "someone")
+            doc = self.o.document(row["doc_id"])
+            last = doc.get("updatedBy") or {}
+            if last.get("id") not in (None, me):
+                people.add(last.get("name") or "someone")
+            if people:
+                return Result(key, "refused", f"edited in Outline by {', '.join(sorted(people))} "
+                                              "since the last sync; ask them which text is right")
+            # Outline's text becomes the base, and the file's baseline is cleared so the next step
+            # patches the file in even when only Outline had moved (outline-edited)
+            self.s.save_doc(self.repo.name, key, row["doc_id"], row["collection_id"],
+                            "", doc["text"], "ok", None)
+            src = dict(tree(files(self.repo))).get(key)
+            r = self.one(key, src)
+            if r.action not in ("cannot-patch", "drift"):
+                return r
+            # Nobody but margin wrote it and nothing is anchored in it, so the whole text may be
+            # replaced, the same reason an empty document is replaced (a replace drops comment
+            # anchors, and here there are none).
+            text = (self.repo.path / src).read_text(errors="replace")
+            title, body = split_title(text, PurePosixPath(key).name)
+            after = self.o.replace(row["doc_id"], body)["text"]
+            self.s.save_doc(self.repo.name, key, row["doc_id"], row["collection_id"],
+                            text, after, "ok",
+                            "the file replaced the document (no person had edited it, no comments)")
+            return Result(key, "patched", "replaced: no person had edited it and it had no comments")
 
     def _run(self) -> list[Result]:
         paths = files(self.repo)
@@ -209,19 +283,30 @@ class Syncer:
             current = self.o.append(doc_id, target[len(current):])["text"]
             if current == target:
                 return
-        for widen in range(tries):
-            if current == target:
-                return
-            ok = True
-            for find, repl in plan(current, target, widen):
+        # ⚠️ ONE HUNK OUTLINE WILL NOT TAKE MUST NOT STOP THE OTHERS (2026-10-12). Outline keeps an
+        # empty paragraph a patch tries to remove (it reads as a third newline between blocks), and
+        # the hunks go bottom-up, so that one hunk used to end the pass and every change above it
+        # (a report's intro, its title) never landed. A hunk whose result differs from what it
+        # should have produced is set aside, and the rest are re-planned from what Outline has;
+        # only when nothing else is left do the hunks widen across more block boundaries.
+        failed: set = set()
+        widen = 0
+        budget = 2 * len(plan(current, target, 0)) + 4 * tries
+        while budget > 0 and current != target:
+            hunks = [h for h in plan(current, target, widen) if h not in failed]
+            if not hunks:
+                if widen + 1 >= tries:
+                    break
+                widen += 1
+                continue
+            for find, repl in hunks:
+                budget -= 1
                 expected = apply(current, [(find, repl)])
                 current = self.o.patch(doc_id, find, repl)["text"]
                 if current != expected:
-                    ok = False
+                    failed.add((find, repl))
                     break
-            if ok and current == target:
-                return
-        if current != target:
+        if current != target and loose(current) != loose(target):
             raise CannotPatch("Outline's text still differs from the file after widening")
 
     def _parent_id(self, key: str) -> str | None:
@@ -285,8 +370,13 @@ class Syncer:
         if title != doc["title"]:
             self.o.set_title(row["doc_id"], title)
         after = self.o.document(row["doc_id"])["text"]
-        status, detail = ("ok", None) if after == target else (
-            "drift", "after patching, Outline's text differs from the file as Outline renders it")
+        if after == target:
+            status, detail = "ok", None
+        elif loose(after) == loose(target):
+            status, detail = "ok", "only blank lines differ from the file"
+        else:
+            status, detail = ("drift", "after patching, Outline's text differs from the file as "
+                                       "Outline renders it")
         # The file's baseline only moves when Outline really matches it, so a failed pass is
         # retried next time instead of being remembered as done.
         self.s.save_doc(self.repo.name, key, row["doc_id"], row["collection_id"],

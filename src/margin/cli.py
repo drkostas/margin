@@ -72,6 +72,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("comment_id")
     p = sub.add_parser("link")
     p.add_argument("files", nargs="+")
+    p = sub.add_parser("accept-file", help="let the file win a conflict no person made")
+    p.add_argument("files", nargs="+")
     sub.add_parser("setup-claude")
     a = ap.parse_args(argv)
 
@@ -162,15 +164,44 @@ def main(argv: list[str] | None = None) -> int:
                 continue
             by_repo.setdefault(hit[0].name, (hit[0], []))[1].append(hit[1])
         for name, (repo, rels) in by_repo.items():
-            got = dict(Syncer(o, store, repo).publish(rels))
+            got = {rel: (d, st, det) for rel, d, st, det in Syncer(o, store, repo).publish_status(rels)}
             for rel in rels:
-                d = got.get(rel)
-                if d:
+                d, status, detail = got.get(rel, (None, "", ""))
+                if d and status == "ok":
                     print(f"[{d['title']}]({doc_url(cfg.url, d)})")
+                elif d:
+                    # The document exists but does not say what the file says. A link printed here
+                    # read as "published" and a chat reported a section that never reached Outline.
+                    print(f"not published: {name}/{rel} is {status}"
+                          + (f" ({detail})" if detail else "")
+                          + f". The document still has the older text: [{d['title']}]"
+                          f"({doc_url(cfg.url, d)})", file=sys.stderr)
+                    bad = 1
                 else:
                     print(f"not published: {name}/{rel} is excluded by the repo's include or "
                           "exclude patterns, or is not markdown", file=sys.stderr)
                     bad = 1
+        return bad
+
+    if a.cmd == "accept-file":
+        from .outline import doc_url
+        bad = 0
+        for f in a.files:
+            hit = repo_of(cfg, Path(f))
+            if not hit:
+                print(f"refused: {f} is in no configured repo", file=sys.stderr)
+                bad = 1
+                continue
+            s = Syncer(o, store, hit[0])
+            r = s.accept_file(hit[1])
+            row = store.doc(hit[0].name, r.path)
+            if r.action == "patched" and row and row["status"] == "ok":
+                d = o.document(row["doc_id"])
+                print(f"accepted the file: [{d['title']}]({doc_url(cfg.url, d)})")
+            else:
+                print(f"refused: {hit[0].name}/{hit[1]} ({r.action}"
+                      + (f": {r.detail}" if r.detail else "") + ")", file=sys.stderr)
+                bad = 1
         return bad
 
     if a.cmd == "thread":
