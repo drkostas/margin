@@ -18,7 +18,7 @@ import sys
 import time
 
 from . import batch
-from .config import DEFAULT_PATH, load, repo_of
+from .config import DEFAULT_PATH, load, locate
 from .inbox import EVENTS, Inbox, serve
 from .outline import Outline, comment_text, pin_host
 from .store import Store
@@ -156,15 +156,17 @@ def main(argv: list[str] | None = None) -> int:
         by_repo: dict = {}
         bad = 0
         for f in a.files:
-            hit = repo_of(cfg, Path(f))
+            hit = locate(cfg, Path(f))
             if not hit:
-                print(f"not published: {f} is in no configured repo. Put it in a repo margin "
-                      "publishes, or add its repo to the config.", file=sys.stderr)
+                print(f"not published: {f} is in no configured repo (nor in a git worktree of "
+                      "one). Put it in a repo margin publishes, or add its repo to the config.",
+                      file=sys.stderr)
                 bad = 1
                 continue
-            by_repo.setdefault(hit[0].name, (hit[0], []))[1].append(hit[1])
-        for name, (repo, rels) in by_repo.items():
-            got = {rel: (d, st, det) for rel, d, st, det in Syncer(o, store, repo).publish_status(rels)}
+            by_repo.setdefault((hit[0].name, hit[2]), (hit[0], []))[1].append(hit[1])
+        for (name, root), (repo, rels) in by_repo.items():
+            got = {rel: (d, st, det)
+                   for rel, d, st, det in Syncer(o, store, repo).publish_status(rels, root)}
             for rel in rels:
                 d, status, detail = got.get(rel, (None, "", ""))
                 if d and status == "ok":
@@ -187,13 +189,13 @@ def main(argv: list[str] | None = None) -> int:
         from .outline import doc_url
         bad = 0
         for f in a.files:
-            hit = repo_of(cfg, Path(f))
+            hit = locate(cfg, Path(f))
             if not hit:
                 print(f"refused: {f} is in no configured repo", file=sys.stderr)
                 bad = 1
                 continue
             s = Syncer(o, store, hit[0])
-            r = s.accept_file(hit[1])
+            r = s.accept_file(hit[1], hit[2])
             row = store.doc(hit[0].name, r.path)
             if r.action == "patched" and row and row["status"] == "ok":
                 d = o.document(row["doc_id"])

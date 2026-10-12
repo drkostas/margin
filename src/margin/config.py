@@ -123,6 +123,37 @@ def load(path: Path = DEFAULT_PATH) -> Config:
         state=Path(raw.get("state", DEFAULT_STATE)).expanduser())
 
 
+def locate(cfg: Config, file: Path) -> tuple[Repo, str, Path] | None:
+    """repo_of, and also a file in another git worktree of a configured repo: (repo, the file's
+    repo-relative path, the folder that path is relative to). Every chat works in its own worktree,
+    so a file there is found through git's common directory, which names the main checkout."""
+    hit = repo_of(cfg, file)
+    if hit:
+        return hit[0], hit[1], hit[0].path.resolve()
+    import subprocess
+    f = file.expanduser().resolve()
+    try:
+        r = subprocess.run(["git", "-C", str(f.parent), "rev-parse", "--path-format=absolute",
+                            "--show-toplevel", "--git-common-dir"],
+                           capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    lines = r.stdout.splitlines()
+    if r.returncode != 0 or len(lines) < 2:
+        return None
+    top, main = Path(lines[0]).resolve(), Path(lines[1]).resolve().parent
+    best = None
+    for repo in cfg.repos:
+        root = repo.path.resolve()
+        if root != main and main not in root.parents:
+            continue                       # not this git repository
+        here = top / root.relative_to(main)  # the configured folder, inside the worktree
+        if f == here or here in f.parents:
+            if best is None or len(here.parts) > len(best[2].parts):
+                best = (repo, f.relative_to(here).as_posix(), here)
+    return best
+
+
 def repo_of(cfg: Config, file: Path) -> tuple[Repo, str] | None:
     """The configured repo a file lives in, and its repo-relative path. The deepest repo wins."""
     f = file.expanduser().resolve()

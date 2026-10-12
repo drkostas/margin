@@ -40,7 +40,10 @@ After you create or change a document, publish it and hand over the link.
 margin link path/to/doc.md [more files...]
 ```
 
-It publishes those files at once and prints one Markdown link per file. **Put every link it
+It publishes those files at once and prints one Markdown link per file. A file in a git
+worktree of a published repository works too: margin finds the repository through git, and keeps
+publishing the worktree's version (the sync pass does not put the main folder's older text back)
+until the main folder has the same text, or the worktree file is gone. **Put every link it
 prints in your reply to the person**, so they can open each document you wrote or changed. Use only
 links margin printed. Never build an Outline address yourself. If margin prints "not published",
 tell the person which file and why, and fix it (move the file into a published repository, or ask
