@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- `margin link` prints a link only for a document that now says what the file says. A conflict, a document margin could not patch, or one edited in Outline prints "not published: <status>" with the older document's link, and the command exits non-zero.
+- `margin accept-file FILE...` lets the file win a conflict when nobody but margin edited the document since the last sync and it has no comments, and otherwise refuses and names who edited it.
+- A hunk Outline will not take (an empty paragraph it keeps) no longer stops the other hunks of a pass. A document whose words match the file and whose only difference is blank lines is in sync.
+- The skill says not to put a link or a code span inside bold text, which Outline rewrites so the document can never match the file.
+
 ## 0.2.0
 
 - Titles longer than Outline accepts (100 characters) are cut at a word boundary, and the serve log gives the reason a document failed.
