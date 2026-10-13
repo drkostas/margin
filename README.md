@@ -7,6 +7,7 @@ Each repository becomes one Outline collection. Folders become parent documents,
 ## What it does
 
 - **Publishes changes as small patches.** A comment in Outline is attached to a piece of text. Replacing a whole document through Outline's API removes every one of those attachments, so margin never does that. It works out the smallest changes, applies them one at a time, and checks each result against what it expected.
+- **Publishes the pictures a file shows.** A local image referenced by a relative path (`![The settings page](shots/settings.png)`) is uploaded once as an attachment of its document, so everyone who can read the document sees it. The file keeps its relative path. A changed picture counts as a changed file.
 - **Never settles a disagreement by "newest wins".** margin keeps both sides' text from the last sync. If only the file changed, it patches Outline. If someone edited the document in Outline, or both changed, it leaves both alone and reports the document.
 - **Collects comments two ways.** Outline sends a signed webhook for each new comment. A catch-up poll every few minutes finds anything the webhook missed, for example while the machine was asleep. A comment that arrives both ways is recorded once.
 - **Sends comments in batches.** A burst of comments becomes one message. A batch is delivered after a quiet period (3 minutes by default), never later than a cap after its first comment (15 minutes), and at once when a comment mentions the agent's user.

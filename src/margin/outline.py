@@ -129,6 +129,39 @@ class Outline:
     def set_title(self, doc_id: str, title: str) -> dict:
         return self.data("documents.update", {"id": doc_id, "title": title})
 
+    # ---- attachments
+    def upload(self, name: str, content_type: str, data: bytes, document_id: str) -> str:
+        """Upload a file as an attachment of `document_id` and return the address a document uses
+        for it (`/api/attachments.redirect?id=...`).
+
+        Outline answers attachments.create with where to send the bytes: its own files.create when
+        it stores files itself, or a storage service's pre-signed address. The API key goes only to
+        Outline's own address, never to a storage service."""
+        import uuid
+        d = self.data("attachments.create", {"name": name, "contentType": content_type,
+                                             "size": len(data), "documentId": document_id,
+                                             "preset": "documentAttachment"})
+        up = d["uploadUrl"]
+        own = up.startswith("/") or up.startswith(self.url + "/")
+        if up.startswith("/"):
+            up = self.url + up
+        b = "----margin" + uuid.uuid4().hex
+        parts = [f'--{b}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'.encode()
+                 for k, v in (d.get("form") or {}).items()]
+        parts.append(f'--{b}\r\nContent-Disposition: form-data; name="file"; filename="{name}"\r\n'
+                     f"Content-Type: {content_type}\r\n\r\n".encode() + data + b"\r\n")
+        parts.append(f"--{b}--\r\n".encode())
+        headers = {"Content-Type": f"multipart/form-data; boundary={b}"}
+        if own:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        req = urllib.request.Request(up, b"".join(parts), headers)
+        try:
+            with urllib.request.urlopen(req, timeout=max(self.timeout, 120)) as r:
+                r.read()
+        except urllib.error.HTTPError as e:
+            raise OutlineError("upload", e.code, "", e.read().decode(errors="replace")[:200])
+        return d["attachment"]["url"]
+
     # ---- comments
     def comments(self, collection_id: str | None = None, document_id: str | None = None):
         body: dict = {"includeAnchorText": True, "sort": "createdAt", "direction": "DESC"}
