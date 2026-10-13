@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- A changed paragraph is patched word by word: each run of changed words is one patch with just enough words around it to be unique, so a comment anchored on words the edit kept keeps its highlight. Checked against Outline's own patch code, where a whole-paragraph patch dropped the comment mark and the word-level one kept it.
 - A local image a file shows (`![alt](path/to/picture.png)`, png, jpg, gif, webp or svg) is uploaded as an attachment of its document and the published text points at it, while the file keeps its relative path. Each picture is uploaded once per document and content, and a changed picture republishes the document even when the markdown did not change.
 - `margin link` and `margin accept-file` take a file in a git worktree of a configured repository. The worktree's version stays published, and the sync pass does not undo it, until the main folder has the same text or the worktree file is gone.
 - `margin link` prints a link only for a document that now says what the file says. A conflict, a document margin could not patch, or one edited in Outline prints "not published: <status>" with the older document's link, and the command exits non-zero.
