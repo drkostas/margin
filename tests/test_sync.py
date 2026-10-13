@@ -181,6 +181,17 @@ def test_accept_merged_refuses_a_line_removed_in_outline_that_the_file_still_has
     assert "Old line." not in o.docs[doc_id]["text"]
 
 
+def test_accept_merged_undoes_only_what_the_person_agreed_to_undo(tmp_path):
+    root, o, s, doc_id = _person_edited(tmp_path)
+    d = o.docs[doc_id]
+    d["text"] = d["text"].replace("First line.", "First line. A slip")
+    (root / "notes.md").write_text("# Notes\n\n## Subjects\n\nFirst line.\n\nOld line.\n\nNew line.\n")
+    assert s.accept_merged("notes.md").action == "refused"            # the slip is not in the file
+    r = s.accept_merged("notes.md", undo=("A slip",))
+    assert r.action == "patched", r
+    text = o.docs[doc_id]["text"]
+    assert "A slip" not in text and "## Subjects" in text and "New line." in text
+
 def test_accept_merged_refuses_when_nobody_edited_in_outline(tmp_path):
     root, o, s = _world(tmp_path)
     s.publish_status(["notes.md"])

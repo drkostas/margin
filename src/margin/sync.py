@@ -133,6 +133,16 @@ def tree(paths: list[str]) -> list[tuple[str, str | None]]:
 
 
 
+def outline_hunks(base: str, current: str) -> list[tuple[list[str], list[str]]]:
+    """An edit in Outline as hunks, each (lines it removed, lines it added), blank lines left out."""
+    a, b = base.splitlines(), current.splitlines()
+    out = []
+    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
+        if op != "equal":
+            out.append(([x for x in a[i1:i2] if x.strip()], [x for x in b[j1:j2] if x.strip()]))
+    return out
+
+
 def outline_edit(base: str, current: str) -> tuple[list[str], list[str]]:
     """The non-blank lines an edit in Outline added (or changed to) and the ones it removed, from
     the text at the last sync to the text now. A removed line that is still somewhere in the
@@ -337,12 +347,16 @@ class Syncer:
     def unpin(self, key: str) -> None:
         self.s.db.execute("DELETE FROM kv WHERE k=?", (self._pin_key(key),))
 
-    def accept_merged(self, rel: str, root: Path | None = None) -> Result:
+    def accept_merged(self, rel: str, root: Path | None = None, undo: tuple[str, ...] = ()) -> Result:
         """Settle a conflict a person made, once their Outline edit has been copied into the file.
         Every line they added or changed since the last sync must be in the file as Outline writes
         it, and no line they removed may be in it; otherwise it refuses and names the line, so
         their edit is never lost. Then Outline's text becomes the base and the file is patched in,
-        which leaves every comment anchored on text the file did not change."""
+        which leaves every comment anchored on text the file did not change.
+
+        `undo` names parts of their edit the person agreed to undo (2026-10-13: a heading marker and
+        a deleted phrase that were slips while reviewing on a phone). A line of their edit that
+        contains one of them is not required in the file, so the file's version wins there."""
         parent, name = rel.rpartition("/")[0], rel.rpartition("/")[2]
         key = parent if parent and name.lower() == "readme.md" else rel
         with repo_lock(self.s, self.repo.name):
@@ -361,7 +375,17 @@ class Syncer:
             file = self.repo.path / src
             title, body = split_title(file.read_text(errors="replace"), PurePosixPath(key).name)
             target = self.canonical(self.resolve(body, file.parent, row["doc_id"]))
-            added, removed = outline_edit(row["base_outline"], current)
+            agreed = [u for u in undo if u.strip()]
+            if agreed:
+                # a hunk the person agreed to undo is left out whole: its new lines and the lines
+                # they replaced, so the file's version of that place wins
+                kept = [(r, a) for r, a in outline_hunks(row["base_outline"], current)
+                        if not any(u in ln for u in agreed for ln in r + a)]
+                still = {ln.strip() for ln in current.splitlines()}
+                added = [ln for _, a in kept for ln in a]
+                removed = [ln for r, _ in kept for ln in r if ln.strip() not in still]
+            else:
+                added, removed = outline_edit(row["base_outline"], current)
             have = {line.strip() for line in target.splitlines()}
             missing = [line for line in added if line.strip() not in have]
             kept = [line for line in removed if line.strip() in have]
