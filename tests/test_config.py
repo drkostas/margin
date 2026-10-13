@@ -108,3 +108,37 @@ def test_a_document_no_route_names_goes_to_whoever_linked_it(tmp_path):
     assert inbox.route_of("d-new") == "sessions-chat"      # linked by that chat
     assert inbox.route_of("d-vision") == "vision"          # a named route still wins
     assert inbox.route_of("d-old") == "core"               # nobody recorded: the repo's route
+
+
+def test_a_comment_on_a_picture_names_the_picture(tmp_path):
+    """Outline gives a comment on a picture an empty anchor, so margin reads the document's
+    structure and names the picture by its caption, else by the heading above it."""
+    from margin.inbox import Inbox
+    from margin.store import Store
+
+    image = lambda alt, cid: {"type": "image", "attrs": {"alt": alt, "marks": (  # noqa: E731
+        [{"type": "comment", "attrs": {"id": cid}}] if cid else [])}}
+
+    class FakeOutline:
+        def me(self):
+            return {"id": "u-agent"}
+
+        def structure(self, doc_id):
+            return {"type": "doc", "content": [
+                {"type": "heading", "content": [{"type": "text", "text": "Living room TV"}]},
+                {"type": "paragraph", "content": [image("Living room TV", None)]},
+                {"type": "heading", "content": [{"type": "text", "text": "Bedroom TV"}]},
+                {"type": "paragraph", "content": [image("Bedroom TV", "c-pic")]},
+                {"type": "heading", "content": [{"type": "text", "text": "Robot"}]},
+                {"type": "paragraph", "content": [image("", "c-noalt")]}]}
+
+    from margin.config import Config
+    cfg = Config(url="u", api_key_command=["true"], admin_key_command=None, pin_ip_command=None,
+                 listen="", webhook_url="", secret_command=None, poll_seconds=1, quiet_seconds=1,
+                 cap_seconds=1, notify_command=None, notify_cwd=None, mcp_url=None,
+                 repos=[Repo("drlab", tmp_path, route="core")], state=tmp_path / "s.db",
+                 author_command=None)
+    inbox = Inbox(cfg, FakeOutline(), Store(tmp_path / "s.db"))
+    assert inbox.picture_of("d1", "c-pic") == "the picture Bedroom TV"
+    assert inbox.picture_of("d1", "c-noalt") == "the picture Robot"      # no caption: its heading
+    assert inbox.picture_of("d1", "c-text") is None                      # not on a picture
