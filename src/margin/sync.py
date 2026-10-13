@@ -16,6 +16,7 @@ Nothing is ever settled by "the newest wins".
 """
 from __future__ import annotations
 
+import difflib
 import fnmatch
 import hashlib
 from dataclasses import dataclass
@@ -129,6 +130,22 @@ def tree(paths: list[str]) -> list[tuple[str, str | None]]:
         else:
             keys[rel] = rel
     return sorted(keys.items(), key=lambda kv: (kv[0].count("/"), kv[0]))
+
+
+
+def outline_edit(base: str, current: str) -> tuple[list[str], list[str]]:
+    """The non-blank lines an edit in Outline added (or changed to) and the ones it removed, from
+    the text at the last sync to the text now. A removed line that is still somewhere in the
+    document is not counted as removed."""
+    a, b = base.splitlines(), current.splitlines()
+    added, removed = [], []
+    for op, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b, autojunk=False).get_opcodes():
+        if op in ("replace", "insert"):
+            added += [line for line in b[j1:j2] if line.strip()]
+        if op in ("replace", "delete"):
+            removed += [line for line in a[i1:i2] if line.strip()]
+    still = {line.strip() for line in b}
+    return added, [line for line in removed if line.strip() not in still]
 
 
 class Syncer:
@@ -319,6 +336,45 @@ class Syncer:
 
     def unpin(self, key: str) -> None:
         self.s.db.execute("DELETE FROM kv WHERE k=?", (self._pin_key(key),))
+
+    def accept_merged(self, rel: str, root: Path | None = None) -> Result:
+        """Settle a conflict a person made, once their Outline edit has been copied into the file.
+        Every line they added or changed since the last sync must be in the file as Outline writes
+        it, and no line they removed may be in it; otherwise it refuses and names the line, so
+        their edit is never lost. Then Outline's text becomes the base and the file is patched in,
+        which leaves every comment anchored on text the file did not change."""
+        parent, name = rel.rpartition("/")[0], rel.rpartition("/")[2]
+        key = parent if parent and name.lower() == "readme.md" else rel
+        with repo_lock(self.s, self.repo.name):
+            row = self.s.doc(self.repo.name, key)
+            if row is None:
+                return Result(key, "refused", "it was never published; margin link publishes it")
+            if root is not None and Path(root).resolve() != self.repo.path.resolve():
+                self.pin(key, Path(root) / rel)          # the worktree's version is the file
+            src = self.source(key, dict(tree(files(self.repo))).get(key))
+            if src is None:
+                return Result(key, "refused", "the file is gone")
+            current = self.o.document(row["doc_id"])["text"]
+            if current == row["base_outline"]:
+                return Result(key, "refused", "nobody edited the document in Outline since the "
+                                              "last sync; margin link publishes the file")
+            file = self.repo.path / src
+            title, body = split_title(file.read_text(errors="replace"), PurePosixPath(key).name)
+            target = self.canonical(self.resolve(body, file.parent, row["doc_id"]))
+            added, removed = outline_edit(row["base_outline"], current)
+            have = {line.strip() for line in target.splitlines()}
+            missing = [line for line in added if line.strip() not in have]
+            kept = [line for line in removed if line.strip() in have]
+            if missing or kept:
+                said = [f"lacks {m.strip()[:80]!r}" for m in missing[:3]]
+                said += [f"still has {k.strip()[:80]!r}, which was removed in Outline" for k in kept[:3]]
+                return Result(key, "refused", "the file does not carry the Outline edit: "
+                                              + ", ".join(said))
+            # Outline's text is the base now, and the file's baseline is cleared so the next step
+            # patches the file in even when the file had not moved since the last sync
+            self.s.save_doc(self.repo.name, key, row["doc_id"], row["collection_id"],
+                            "", current, "ok", None)
+            return self.one(key, src)
 
     def source(self, key: str, src: str | None) -> str | None:
         """Where `key`'s text comes from: its pinned worktree file while that differs from the main

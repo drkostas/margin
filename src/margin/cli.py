@@ -74,6 +74,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("files", nargs="+")
     p = sub.add_parser("accept-file", help="let the file win a conflict no person made")
     p.add_argument("files", nargs="+")
+    p = sub.add_parser("accept-merged",
+                       help="publish a file that now carries a person's Outline edit")
+    p.add_argument("files", nargs="+")
     sub.add_parser("setup-claude")
     a = ap.parse_args(argv)
 
@@ -185,7 +188,7 @@ def main(argv: list[str] | None = None) -> int:
                     bad = 1
         return bad
 
-    if a.cmd == "accept-file":
+    if a.cmd in ("accept-file", "accept-merged"):
         from .outline import doc_url
         bad = 0
         for f in a.files:
@@ -195,9 +198,10 @@ def main(argv: list[str] | None = None) -> int:
                 bad = 1
                 continue
             s = Syncer(o, store, hit[0])
-            r = s.accept_file(hit[1], hit[2])
+            accept = s.accept_file if a.cmd == "accept-file" else s.accept_merged
+            r = accept(hit[1], hit[2])
             row = store.doc(hit[0].name, r.path)
-            if r.action == "patched" and row and row["status"] == "ok":
+            if r.action in ("patched", "unchanged") and row and row["status"] == "ok":
                 d = o.document(row["doc_id"])
                 print(f"accepted the file: [{d['title']}]({doc_url(cfg.url, d)})")
             else:

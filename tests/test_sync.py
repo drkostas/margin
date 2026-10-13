@@ -137,6 +137,58 @@ def test_accept_file_refuses_a_person_or_a_comment(tmp_path):
     assert s.accept_file("missing.md").action == "refused"
 
 
+def _person_edited(tmp_path):
+    """A person changed a heading in Outline while the file gained a new paragraph."""
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "notes.md").write_text("# Notes\n\n## Kind on the record\n\nFirst line.\n\nOld line.\n")
+    o = FakeOutlineWithPeople()
+    s = Syncer(o, Store(tmp_path / "margin.db"), Repo(name="repo", path=root))
+    [(_, doc, _, _)] = s.publish_status(["notes.md"])
+    d = o.docs[doc["id"]]
+    d["text"] = d["text"].replace("## Kind on the record", "## Subjects")
+    o.revisions[doc["id"]] = [{"createdAt": "2099-01-01T00:00:00Z",
+                               "createdBy": {"id": "u-kostas", "name": "Kostas"}}]
+    o.notes[doc["id"]] = [{"id": "c1"}]
+    (root / "notes.md").write_text("# Notes\n\n## Kind on the record\n\nFirst line.\n\nOld line.\n\nNew line.\n")
+    assert s.publish_status(["notes.md"])[0][2] == "conflict"
+    assert s.accept_file("notes.md").action == "refused"     # a person edited it
+    return root, o, s, doc["id"]
+
+
+def test_accept_merged_refuses_until_the_file_carries_the_outline_edit(tmp_path):
+    root, o, s, doc_id = _person_edited(tmp_path)
+    r = s.accept_merged("notes.md")
+    assert r.action == "refused" and "## Subjects" in r.detail
+    assert "New line." not in o.docs[doc_id]["text"]
+    (root / "notes.md").write_text("# Notes\n\n## Subjects\n\nFirst line.\n\nOld line.\n\nNew line.\n")
+    r = s.accept_merged("notes.md")
+    assert r.action == "patched", r
+    text = o.docs[doc_id]["text"]
+    assert "## Subjects" in text and "New line." in text and "Kind on the record" not in text
+    assert s.publish_status(["notes.md"])[0][2] == "ok"
+
+
+def test_accept_merged_refuses_a_line_removed_in_outline_that_the_file_still_has(tmp_path):
+    root, o, s, doc_id = _person_edited(tmp_path)
+    d = o.docs[doc_id]
+    d["text"] = d["text"].replace("\n\nOld line.", "")
+    (root / "notes.md").write_text("# Notes\n\n## Subjects\n\nFirst line.\n\nOld line.\n\nNew line.\n")
+    r = s.accept_merged("notes.md")
+    assert r.action == "refused" and "Old line." in r.detail and "removed" in r.detail
+    (root / "notes.md").write_text("# Notes\n\n## Subjects\n\nFirst line.\n\nNew line.\n")
+    assert s.accept_merged("notes.md").action == "patched"
+    assert "Old line." not in o.docs[doc_id]["text"]
+
+
+def test_accept_merged_refuses_when_nobody_edited_in_outline(tmp_path):
+    root, o, s = _world(tmp_path)
+    s.publish_status(["notes.md"])
+    r = s.accept_merged("notes.md")
+    assert r.action == "refused" and "nobody edited" in r.detail
+    assert s.accept_merged("missing.md").action == "refused"
+
+
 class OutlineKeepsEmptyParagraphs(FakeOutline):
     """Outline keeps an empty paragraph a patch tries to remove: such a patch changes nothing."""
 
