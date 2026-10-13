@@ -81,3 +81,18 @@ def test_long_titles_are_cut_to_what_outline_accepts():
     assert len(t) <= TITLE_MAX and t.endswith("…") and not t[:-1].endswith(" ")
     assert clamp_title("Short title") == "Short title"
     assert len(clamp_title("x" * 300)) == TITLE_MAX
+
+
+def test_linked_folders_are_walked_once(tmp_path):
+    """A skills folder whose skills are links: unwalked, their documents read as gone."""
+    from margin.sync import files
+    elsewhere = tmp_path / "elsewhere" / "skill"
+    elsewhere.mkdir(parents=True)
+    (elsewhere / "SKILL.md").write_text("# A skill\n")
+    root = tmp_path / "root"
+    (root / "skills").mkdir(parents=True)
+    (root / "skills" / "linked").symlink_to(elsewhere, target_is_directory=True)
+    (root / "skills" / "loop").symlink_to(root, target_is_directory=True)      # an ancestor
+    (root / "top.md").write_text("# Top\n")
+    got = files(Repo(name="r", path=root, include=["**/*.md"]))
+    assert got == ["skills/linked/SKILL.md", "top.md"]

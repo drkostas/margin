@@ -84,12 +84,22 @@ def files(repo: Repo) -> list[str]:
     untracked and git-ignored docs are included on purpose.
 
     Excluded folders are skipped during the walk, not filtered afterwards, so a root that holds
-    tens of thousands of other files (a home config folder full of transcripts) costs nothing."""
+    tens of thousands of other files (a home config folder full of transcripts) costs nothing.
+
+    A linked folder is walked like a real one (a skills folder whose skills are links to where
+    each package keeps it): unwalked, its documents read as gone from the repo. A folder already
+    walked under another name is not walked again, so a link to an ancestor cannot loop."""
     import os
     excludes = ALWAYS_EXCLUDE + repo.exclude
     md_only = all(p.lower().endswith(".md") for p in repo.include)
     out = []
-    for dirpath, dirnames, filenames in os.walk(repo.path):
+    seen: set[str] = set()
+    for dirpath, dirnames, filenames in os.walk(repo.path, followlinks=True):
+        real = os.path.realpath(dirpath)
+        if real in seen:
+            dirnames[:] = []
+            continue
+        seen.add(real)
         base = Path(dirpath).relative_to(repo.path).as_posix()
         base = "" if base == "." else base + "/"
         # a folder is skipped when anything inside it would be excluded
@@ -366,6 +376,23 @@ class Syncer:
         if current != target and loose(current) != loose(target):
             raise CannotPatch("Outline's text still differs from the file after widening")
 
+    def only_margin_edited(self, doc: dict) -> bool:
+        """Whether nobody but margin's own account has edited this document: its last editor is
+        margin and every saved revision was made by margin. Then a difference from the baseline
+        is margin's own (an earlier pass stopped part way), not a person's edit. Any other editor,
+        or no answer, keeps the person's edit safe."""
+        last = (doc.get("updatedBy") or {}).get("id")
+        if not last:
+            return False
+        try:
+            me = (self.o.me() or {}).get("id")
+            if last != me:
+                return False
+            revs = self.o.revisions(doc["id"])
+        except OutlineError:
+            return False
+        return bool(revs) and all((r.get("createdBy") or {}).get("id") == me for r in revs)
+
     def _parent_id(self, key: str) -> str | None:
         parent = key.rpartition("/")[0]
         if not parent:
@@ -401,7 +428,7 @@ class Syncer:
                 return Result(key, "deleted-in-outline")
             raise
         current = doc["text"]
-        outline_changed = current != row["base_outline"]
+        outline_changed = current != row["base_outline"] and not self.only_margin_edited(doc)
 
         if outline_changed and repo_changed:
             self.s.mark(self.repo.name, key, "conflict",
@@ -423,7 +450,12 @@ class Syncer:
             else:
                 self.converge(row["doc_id"], current, target)
         except CannotPatch as e:
-            self.s.mark(self.repo.name, key, "cannot-patch", str(e))
+            # ⛔ the patches that did apply changed Outline's text: keep that text as the baseline,
+            # or the next pass reads margin's own edits as someone else's and calls it a conflict
+            # (2026-10-13, a long plan with tables). The file's baseline stays, so it is retried.
+            now = self.o.document(row["doc_id"])["text"]
+            self.s.save_doc(self.repo.name, key, row["doc_id"], row["collection_id"],
+                            row["base_repo"], now, "cannot-patch", str(e))
             return Result(key, "cannot-patch", str(e))
         if title != doc["title"]:
             self.o.set_title(row["doc_id"], title)
