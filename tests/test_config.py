@@ -71,3 +71,40 @@ def test_setup_claude_is_idempotent(tmp_path):
     deny = json.loads((tmp_path / ".claude" / "settings.json").read_text())["permissions"]["deny"]
     assert "mcp__outline__delete_document" in deny
     assert (tmp_path / ".claude" / "skills" / "margin" / "SKILL.md").exists()
+
+
+def test_a_document_no_route_names_goes_to_whoever_linked_it(tmp_path):
+    """2026-10-13: a chat's new spec had no line in `routes`, so the owner's comments on it went to
+    the default route, and another chat had to forward them. `margin link` now records who ran it
+    (author_command), and that is where the document's comments go unless `routes` names one."""
+    import sys
+    from margin.config import Config
+    from margin.inbox import Inbox
+    from margin.store import Store
+
+    def cfg(cmd):
+        return Config(url="u", api_key_command=["true"], admin_key_command=None, pin_ip_command=None,
+                      listen="", webhook_url="", secret_command=None, poll_seconds=1,
+                      quiet_seconds=1, cap_seconds=1, notify_command=None, notify_cwd=None,
+                      mcp_url=None, repos=[Repo("drlab", tmp_path, route="core",
+                                                routes={"docs/chats/vision.md": "vision"})],
+                      state=tmp_path / "s.db", author_command=cmd)
+
+    assert cfg([sys.executable, "-c", "print('sessions-chat')"]).author() == "sessions-chat"
+    assert cfg([sys.executable, "-c", "import sys; sys.exit(3)"]).author() is None
+    assert cfg(None).author() is None and cfg(["/no/such/command"]).author() is None
+
+    class FakeOutline:
+        def me(self):
+            return {"id": "u-agent"}
+
+    store = Store(tmp_path / "s.db")
+    store.save_doc("drlab", "docs/specs/new.md", "d-new", "c1", "", "")
+    store.save_doc("drlab", "docs/chats/vision.md", "d-vision", "c1", "", "")
+    store.save_doc("drlab", "docs/old.md", "d-old", "c1", "", "")
+    store.put("author:d-new", "sessions-chat")
+    store.put("author:d-vision", "sessions-chat")
+    inbox = Inbox(cfg(None), FakeOutline(), store)
+    assert inbox.route_of("d-new") == "sessions-chat"      # linked by that chat
+    assert inbox.route_of("d-vision") == "vision"          # a named route still wins
+    assert inbox.route_of("d-old") == "core"               # nobody recorded: the repo's route

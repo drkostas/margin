@@ -167,9 +167,13 @@ def main(argv: list[str] | None = None) -> int:
                 bad = 1
                 continue
             by_repo.setdefault((hit[0].name, hit[2]), (hit[0], []))[1].append(hit[1])
+        author = cfg.author()            # the comments on what you link come back to you
         for (name, root), (repo, rels) in by_repo.items():
             got = {rel: (d, st, det)
                    for rel, d, st, det in Syncer(o, store, repo).publish_status(rels, root)}
+            for rel, (d, _, _) in got.items():
+                if d and author:
+                    store.put(f"author:{d['id']}", author)
             for rel in rels:
                 d, status, detail = got.get(rel, (None, "", ""))
                 if d and status == "ok":
