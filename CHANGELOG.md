@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `margin accept-merged --undo TEXT` names a part of the person's Outline edit they agreed to undo, so the file's version wins there while every other line of their edit must still be in the file.
 - A document that no `routes` entry names now sends its comments to whoever last ran `margin link` on it, read from the optional `[notify] author_command`, and to the repo's `route` only when nobody is recorded.
 - A changed paragraph is patched word by word: each run of changed words is one patch with just enough words around it to be unique, so a comment anchored on words the edit kept keeps its highlight. Checked against Outline's own patch code, where a whole-paragraph patch dropped the comment mark and the word-level one kept it.
 - A local image a file shows (`![alt](path/to/picture.png)`, png, jpg, gif, webp or svg) is uploaded as an attachment of its document and the published text points at it, while the file keeps its relative path. Each picture is uploaded once per document and content, and a changed picture republishes the document even when the markdown did not change.
