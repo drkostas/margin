@@ -21,6 +21,8 @@
     command = ["my-notifier", "{route}"]     # gets the batch as JSON on stdin. {text} is the
     cwd = "~/somewhere"                       # rendered message, {repo} and {repo_path} name the
                                               # repo of the batch. cwd is optional.
+    author_command = ["who-am-i"]             # optional: prints the route of whoever runs
+                                              # `margin link`; their documents' comments go there
 
     [[repo]]
     name = "drlab"                            # becomes the Outline collection
@@ -29,6 +31,8 @@
     exclude = ["**/node_modules/**"]
     route = "drlab"                           # passed to the notifier as {route}
     routes = { "docs/chats/vision.md" = "vision" }   # optional: by path prefix, longest wins
+                                              # A document no route names goes to whoever last
+                                              # linked it (author_command), else to `route`.
 
 Secrets are never written in the file. Each one is the output of a command.
 """
@@ -60,11 +64,15 @@ class Repo:
 
     def route_for(self, path: str) -> str:
         """The route for a repo-relative path: the longest matching prefix, else the repo's."""
+        return self.named_route(path) or self.route
+
+    def named_route(self, path: str) -> str | None:
+        """The route `routes` names for a path (the longest matching prefix), or None."""
         best = ""
         for prefix in self.routes:
             if (path == prefix or path.startswith(prefix.rstrip("/") + "/")) and len(prefix) > len(best):
                 best = prefix
-        return self.routes[best] if best else self.route
+        return self.routes[best] if best else None
 
 
 @dataclass
@@ -82,6 +90,7 @@ class Config:
     notify_command: list[str] | None
     notify_cwd: Path | None
     mcp_url: str | None
+    author_command: list[str] | None
     repos: list[Repo]
     state: Path
 
@@ -93,6 +102,19 @@ class Config:
 
     def secret(self) -> str | None:
         return self.run(self.secret_command) if self.secret_command else None
+
+    def author(self) -> str | None:
+        """The route of whoever runs margin now (author_command), or None when there is no such
+        command or it does not answer. Never raises: publishing does not depend on it."""
+        if not self.author_command:
+            return None
+        try:
+            out = subprocess.run(self.author_command, capture_output=True, text=True, timeout=20,
+                                 cwd=str(self.notify_cwd) if self.notify_cwd else None)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        name = (out.stdout or "").strip().splitlines()
+        return name[0].strip() if out.returncode == 0 and name and name[0].strip() else None
 
     def repo(self, name: str) -> Repo:
         for r in self.repos:
@@ -119,7 +141,7 @@ def load(path: Path = DEFAULT_PATH) -> Config:
         quiet_seconds=int(b.get("quiet_seconds", 180)), cap_seconds=int(b.get("cap_seconds", 900)),
         notify_command=n.get("command"),
         notify_cwd=Path(n["cwd"]).expanduser() if n.get("cwd") else None,
-        mcp_url=o.get("mcp_url"), repos=repos,
+        mcp_url=o.get("mcp_url"), repos=repos, author_command=n.get("author_command"),
         state=Path(raw.get("state", DEFAULT_STATE)).expanduser())
 
 

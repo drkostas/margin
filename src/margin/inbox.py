@@ -54,9 +54,13 @@ class Inbox:
 
     # ---- recording
     def route_of(self, document_id: str) -> str | None:
+        """Where a document's comments go: the route `routes` names for its path, else whoever last
+        linked it (recorded by `margin link`), else the repo's route."""
         row = self.s.doc_by_id(document_id)
         repo = self.repos.get(row["repo"]) if row else None
-        return repo.route_for(row["path"]) if repo else None
+        if repo is None:
+            return None
+        return repo.named_route(row["path"]) or self.s.get(f"author:{document_id}") or repo.route
 
     def record(self, c: dict, via: str) -> bool:
         if c.get("createdById") == self.agent_id:
