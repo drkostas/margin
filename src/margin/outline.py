@@ -40,11 +40,13 @@ class Outline:
         self.timeout = timeout
         self._me: dict | None = None
 
-    def call(self, method: str, body: dict | None = None, retries: int = 3) -> dict:
+    def call(self, method: str, body: dict | None = None, retries: int = 3,
+             headers: dict | None = None) -> dict:
         data = json.dumps(body or {}).encode()
         req = urllib.request.Request(
             f"{self.url}/api/{method}", data,
-            {"Content-Type": "application/json", "Authorization": f"Bearer {self.api_key}"})
+            {"Content-Type": "application/json", "Authorization": f"Bearer {self.api_key}",
+             **(headers or {})})
         for attempt in range(retries + 1):
             try:
                 with urllib.request.urlopen(req, timeout=self.timeout) as r:
@@ -68,6 +70,13 @@ class Outline:
 
     def data(self, method: str, body: dict | None = None):
         return self.call(method, body).get("data")
+
+    def structure(self, doc_id: str) -> dict | None:
+        """A document as Outline's editor holds it (ProseMirror JSON), comment marks included.
+        API version 3 returns it in place of the markdown; the markdown has no comment marks."""
+        got = self.call("documents.info", {"id": doc_id}, headers={"x-api-version": "3"})
+        doc = (got.get("data") or {})
+        return (doc.get("document") or doc).get("data")
 
     def paged(self, method: str, body: dict | None = None, limit: int = 100):
         """Every row of a paginated list method."""

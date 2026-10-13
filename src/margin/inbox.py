@@ -62,13 +62,41 @@ class Inbox:
             return None
         return repo.named_route(row["path"]) or self.s.get(f"author:{document_id}") or repo.route
 
+    def picture_of(self, document_id: str, comment_id: str) -> str | None:
+        """The picture a comment is attached to, by its caption, or None. A comment on a picture has
+        no anchor text (Outline gives an empty one), so without this it read as a comment on the
+        whole document and nobody could tell which picture it meant (2026-10-13)."""
+        try:
+            doc = self.o.structure(document_id)
+        except Exception:                        # noqa: BLE001 - the comment is kept either way
+            return None
+        found: list[str] = []
+
+        def walk(n, heading):
+            if not isinstance(n, dict):
+                return heading
+            if n.get("type") == "heading":
+                heading = "".join(c.get("text", "") for c in n.get("content") or [] if isinstance(c, dict))
+            if n.get("type") == "image" and any(
+                    m.get("type") == "comment" and (m.get("attrs") or {}).get("id") == comment_id
+                    for m in (n.get("attrs") or {}).get("marks") or []):
+                found.append((n.get("attrs") or {}).get("alt") or heading or "a picture")
+            for c in n.get("content") or []:
+                heading = walk(c, heading)
+            return heading
+
+        walk(doc or {}, None)
+        return f"the picture {found[0]}" if found else None
+
     def record(self, c: dict, via: str) -> bool:
         if c.get("createdById") == self.agent_id:
             return False
         rec = {
             "id": c["id"], "document_id": c["documentId"], "parent_id": c.get("parentCommentId"),
             "author_id": c.get("createdById"), "author": (c.get("createdBy") or {}).get("name"),
-            "text": comment_text(c.get("data")), "anchor": c.get("anchorText"),
+            "text": comment_text(c.get("data")),
+            "anchor": c.get("anchorText") or (None if c.get("parentCommentId")
+                                              else self.picture_of(c["documentId"], c["id"])),
             "created_at": c["createdAt"], "mentions_agent": self.agent_id in mentions(c.get("data")),
             "route": self.route_of(c["documentId"]), "via": via,
         }
