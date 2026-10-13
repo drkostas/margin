@@ -76,8 +76,9 @@ Use `margin thread <comment-id>` to read the whole thread when a comment is a re
 ## Rules
 
 - Your replies are posted as the agent's own Outline user. Write them as yourself, in plain words.
-- Keep edits small. A comment attached to text you rewrite loses its highlight. Change only what the
-  comment is about.
+- Keep edits small. A comment attached to text you rewrite loses its highlight. margin patches only
+  the words that changed, so a comment on words you keep stays highlighted, even in a paragraph you
+  edited. Change only what the comment is about.
 - Never replace a whole document, never delete or move one, and never share one publicly. Sharing
   is the person's decision. Moving a page is done by moving its file.
 - If `margin sync` or `margin link` reports `conflict` or `outline-edited`, run

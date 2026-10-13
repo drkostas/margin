@@ -14,8 +14,66 @@ def test_no_change_is_no_patch():
 def test_one_line_change_patches_only_that_line():
     target = DOC.replace("Last.", "Last, edited.")
     p = plan(DOC, target)
-    assert p == [("Last.", "Last, edited.")]
+    assert p == [("Last", "Last, edited")]       # only the words that changed, unique as they are
     assert apply(DOC, p) == target
+
+
+QUIET = ("**Quiet nights.** Between 23:00 and 08:00 (you can change the hours in drlab › Settings) "
+         "nothing is pushed except a critical problem. An approval asked at night waits.")
+
+
+def test_a_comment_on_unchanged_words_of_a_changed_paragraph_keeps_its_anchor():
+    """2026-10-13: removing a bracket after "Between 23:00 and 08:00" replaced the whole paragraph,
+    and the comment anchored on those words lost its highlight. Only the changed words are patched
+    now, so the anchored words are in no find."""
+    doc = "## Notifications\n\n" + QUIET + "\n\n## Next\n\nText."
+    target = doc.replace(" (you can change the hours in drlab › Settings)", "")
+    p = plan(doc, target)
+    assert apply(doc, p) == target
+    assert p and all("23:00 and 08:00" not in find for find, _ in p), p
+    assert all("nothing is pushed" not in find for find, _ in p), p
+
+
+def test_several_changes_in_one_paragraph_each_patch_their_own_words():
+    doc = "Intro.\n\nThe cache holds entries for ten minutes and the queue keeps them for an hour.\n\nEnd."
+    target = "Intro.\n\nThe store holds entries for ten minutes and the queue keeps them for a day.\n\nEnd."
+    p = plan(doc, target)
+    assert apply(doc, p) == target
+    assert len(p) == 2 and all("ten minutes" not in f for f, _ in p), p
+
+
+def test_a_changed_word_found_elsewhere_takes_context_until_unique():
+    doc = "the cat sat on the mat.\n\nthe dog sat on the mat."
+    target = "the cat sat on the mat.\n\nthe dog lay on the mat."
+    p = plan(doc, target)
+    assert apply(doc, p) == target
+    find = p[0][0]
+    assert doc.count(find) == 1 and "dog" in find and "\n" not in find, p
+
+
+def test_random_word_edits_inside_lines_reproduce_the_target():
+    rnd = random.Random(11)
+    vocab = ["the", "cache", "holds", "ten", "minutes", "a", "queue", "(", ")", "›", "same", "same"]
+    for _ in range(400):
+        lines = [" ".join(rnd.choice(vocab) for _ in range(rnd.randint(1, 9))) for _ in range(rnd.randint(1, 6))]
+        new = lines[:]
+        for _ in range(rnd.randint(1, 3)):
+            li = rnd.randrange(len(new))
+            w = new[li].split(" ")
+            op, pos = rnd.choice("ird"), rnd.randrange(len(w))
+            if op == "i":
+                w.insert(pos, rnd.choice(vocab) + str(rnd.randint(0, 9)))
+            elif op == "r":
+                w[pos] = "changed" + str(rnd.randint(0, 99))
+            elif len(w) > 1:
+                w.pop(pos)
+            new[li] = " ".join(w)
+        cur, tgt = "\n".join(lines), "\n".join(new)
+        try:
+            p = plan(cur, tgt)
+        except CannotPatch:
+            continue
+        assert apply(cur, p) == tgt
 
 
 def test_untouched_sections_are_never_inside_a_patch():
