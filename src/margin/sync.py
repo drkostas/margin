@@ -21,6 +21,7 @@ import hashlib
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
+from . import images
 from .config import ALWAYS_EXCLUDE, Repo
 from .outline import Outline, OutlineError
 from .patches import CannotPatch, apply, plan
@@ -182,6 +183,23 @@ class Syncer:
         self.s.put(f"canon:{h}", text)
         return text
 
+    def resolve(self, body: str, base: Path, doc_id: str) -> str:
+        """`body` with each local picture it shows uploaded as an attachment of `doc_id` and
+        pointed at. A picture already uploaded for this document with the same content is reused."""
+        pics = images.local(body, base)
+        if not pics:
+            return body
+        urls = {}
+        for ref, path in pics:
+            data = path.read_bytes()
+            key = f"image:{doc_id}:{hashlib.sha256(data).hexdigest()}"
+            url = self.s.get(key)
+            if url is None:
+                url = self.o.upload(path.name, images.TYPES[path.suffix.lower()], data, doc_id)
+                self.s.put(key, url)
+            urls[ref] = url
+        return images.point(body, urls)
+
     # ---- one pass
     def run(self) -> list[Result]:
         with repo_lock(self.s, self.repo.name):
@@ -272,11 +290,13 @@ class Syncer:
             # Nobody but margin wrote it and nothing is anchored in it, so the whole text may be
             # replaced, the same reason an empty document is replaced (a replace drops comment
             # anchors, and here there are none).
-            text = (self.repo.path / self.source(key, src)).read_text(errors="replace")
+            file = self.repo.path / self.source(key, src)
+            text = file.read_text(errors="replace")
             title, body = split_title(text, PurePosixPath(key).name)
-            after = self.o.replace(row["doc_id"], body)["text"]
+            ident = text + images.digest(body, file.parent)
+            after = self.o.replace(row["doc_id"], self.resolve(body, file.parent, row["doc_id"]))["text"]
             self.s.save_doc(self.repo.name, key, row["doc_id"], row["collection_id"],
-                            text, after, "ok",
+                            ident, after, "ok",
                             "the file replaced the document (no person had edited it, no comments)")
             return Result(key, "patched", "replaced: no person had edited it and it had no comments")
 
@@ -407,14 +427,23 @@ class Syncer:
         text = (self.repo.path / src).read_text(errors="replace") if src else ""
         title, body = split_title(text, fallback)
         title = clamp_title(title)
+        base = (self.repo.path / src).parent if src else self.repo.path
+        # what margin compares: the file, plus each picture's content (a changed picture is a change)
+        ident = text + images.digest(body, base)
         row = self.s.doc(self.repo.name, key)
 
         if row is None:
-            doc = self.o.create_document(self.collection, title, body, self._parent_id(key))
-            self.s.save_doc(self.repo.name, key, doc["id"], self.collection, text, doc["text"])
+            # a picture is attached to its document, so a document with pictures is made first
+            # and filled once it has an id (it is new: no comment can be anchored in it yet)
+            pics = images.local(body, base)
+            doc = self.o.create_document(self.collection, title, "" if pics else body,
+                                         self._parent_id(key))
+            if pics:
+                doc = self.o.replace(doc["id"], self.resolve(body, base, doc["id"]))
+            self.s.save_doc(self.repo.name, key, doc["id"], self.collection, ident, doc["text"])
             return Result(key, "created")
 
-        repo_changed = text != row["base_repo"]
+        repo_changed = ident != row["base_repo"]
         dirty_key = f"dirty:{row['doc_id']}"
         if not (repo_changed or self.full or self.s.get(dirty_key) or row["status"] != "ok"):
             return Result(key, "unchanged")       # nothing says either side moved: no API call
@@ -443,6 +472,7 @@ class Syncer:
                 self.s.mark(self.repo.name, key, "ok")
             return Result(key, "unchanged")
 
+        body = self.resolve(body, base, row["doc_id"])
         target = self.canonical(body)
         try:
             if not current.strip():
@@ -470,5 +500,5 @@ class Syncer:
         # The file's baseline only moves when Outline really matches it, so a failed pass is
         # retried next time instead of being remembered as done.
         self.s.save_doc(self.repo.name, key, row["doc_id"], row["collection_id"],
-                        text if status == "ok" else row["base_repo"], after, status, detail)
+                        ident if status == "ok" else row["base_repo"], after, status, detail)
         return Result(key, "patched" if status == "ok" else "drift", detail or "")

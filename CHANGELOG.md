@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- A local image a file shows (`![alt](path/to/picture.png)`, png, jpg, gif, webp or svg) is uploaded as an attachment of its document and the published text points at it, while the file keeps its relative path. Each picture is uploaded once per document and content, and a changed picture republishes the document even when the markdown did not change.
 - `margin link` and `margin accept-file` take a file in a git worktree of a configured repository. The worktree's version stays published, and the sync pass does not undo it, until the main folder has the same text or the worktree file is gone.
 - `margin link` prints a link only for a document that now says what the file says. A conflict, a document margin could not patch, or one edited in Outline prints "not published: <status>" with the older document's link, and the command exits non-zero.
 - `margin accept-file FILE...` lets the file win a conflict when nobody but margin edited the document since the last sync and it has no comments, and otherwise refuses and names who edited it.

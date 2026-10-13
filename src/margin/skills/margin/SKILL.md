@@ -51,6 +51,11 @@ for the repository to be added to the configuration). "not published: ... is con
 `cannot-patch`, `drift`, `outline-edited`) means the document still has an older text, and `margin
 link` exits non-zero: the document is not published until the conflict is settled (below).
 
+To show a picture, save it next to the document (for example in a `shots/` folder beside it) and
+refer to it by a relative path, `![What it shows](shots/name.png)`. margin uploads it to the
+document and keeps it in sync; a changed picture republishes the document. Never paste an
+Outline attachment address into a file.
+
 Do not put a link or a code span inside bold text, as in `**A follow-up, [#581](url).**`. Outline
 rewrites it as `**A follow-up,** [**#581**](url)**.**`, so the document can never equal the file and
 every update of it fails. Put the link after the bold label: `**A follow-up.** [#581](url)`.
