@@ -84,5 +84,8 @@ Use `margin thread <comment-id>` to read the whole thread when a comment is a re
   `margin accept-file <file>`. It lets the file win only when nobody but margin edited the
   document since the last sync and it has no comments, and otherwise it refuses and names who
   edited it. When it refuses, the person changed the document in Outline: do not force your
-  version, tell them which document it is and ask.
+  version. Read the document (Outline's MCP `fetch`), copy their edit into the file, and run
+  `margin accept-merged <file>`. It publishes only when every line they added or changed is in
+  the file and no line they removed is, and otherwise refuses and names the line. When their
+  edit and yours cannot both stand, tell them which document it is and ask.
 - Say a document is published only when `margin link` printed its link in this turn.
