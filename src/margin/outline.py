@@ -122,6 +122,10 @@ class Outline:
         outright (the scratch document), never for a document someone may have commented on."""
         return self.data("documents.update", {"id": doc_id, "editMode": "replace", "text": text})
 
+    def revisions(self, doc_id: str) -> list[dict]:
+        """Every saved revision of a document, each with `createdBy`."""
+        return list(self.paged("revisions.list", {"documentId": doc_id}))
+
     def set_title(self, doc_id: str, title: str) -> dict:
         return self.data("documents.update", {"id": doc_id, "title": title})
 
