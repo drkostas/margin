@@ -80,6 +80,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--undo", action="append", default=[],
                    help="text from a part of their edit the person agreed to undo (repeatable)")
     sub.add_parser("setup-claude")
+    sub.add_parser("anchors", help="record where each older comment's passage sits in its document")
     a = ap.parse_args(argv)
 
     from pathlib import Path
@@ -125,6 +126,10 @@ def main(argv: list[str] | None = None) -> int:
             for repo, r in sync_all():
                 print(f"sync: {r.action} {repo}/{r.path}" + (f"  ({r.detail})" if r.detail else ""),
                       flush=True)
+                # a changed text moves its passages, and a rewritten one loses its mark
+                row = store.doc(repo, r.path) if r.action in ("patched", "outline-edited") else None
+                if row:
+                    inbox.place(row["doc_id"])
 
         serve(inbox, sync_pass)
         return 0
@@ -141,6 +146,15 @@ def main(argv: list[str] | None = None) -> int:
         wait = batch.due_in(pend, time.time(), cfg.quiet_seconds, cfg.cap_seconds)
         print(f"{len(store.docs())} documents, {len(bad)} need attention, {len(pend)} comment(s) "
               "waiting" + (f", next batch in {int(wait)} s" if wait is not None else ""))
+        return 0
+
+    if a.cmd == "anchors":
+        inbox = Inbox(cfg, o, store)
+        done = gone = 0
+        for doc_id in dict.fromkeys(r["document_id"] for r in store.without_anchor_before()):
+            p, g = inbox.place(doc_id)
+            done, gone = done + p, gone + g
+        print(f"{done} passage(s) placed, {gone} with no mark left in their document")
         return 0
 
     if a.cmd == "reply":

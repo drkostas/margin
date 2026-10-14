@@ -76,3 +76,53 @@ def test_an_older_store_gains_the_column(tmp_path):
     store = Store(path)
     cols = {r["name"] for r in store.db.execute("PRAGMA table_info(comment)").fetchall()}
     assert "resolved_at" in cols
+
+
+def test_where_a_passage_sits_is_read_from_the_marks():
+    from margin.inbox import anchor_before
+    mark = {"type": "comment", "attrs": {"id": "c1"}}
+    doc = {"type": "doc", "content": [
+        {"type": "paragraph", "content": [{"type": "text", "text": "Search is first. "}]},
+        {"type": "paragraph", "content": [
+            {"type": "text", "text": "Then a "},
+            {"type": "text", "text": "bold", "marks": [{"type": "strong"}]},
+            {"type": "text", "text": " word and "},
+            {"type": "text", "text": "search", "marks": [mark]},
+            {"type": "text", "text": " again."}]},
+        {"type": "paragraph", "content": [{"type": "text", "text": "opens", "marks": [
+            {"type": "comment", "attrs": {"id": "c2"}}]}]}]}
+    assert anchor_before(doc, "c1") == "Then a bold word and "
+    assert anchor_before(doc, "c2") == ""                       # the passage opens its paragraph
+    assert anchor_before(doc, "c3") is None                     # no mark for it
+    long = {"type": "doc", "content": [{"type": "paragraph", "content": [
+        {"type": "text", "text": "x" * 100}, {"type": "text", "text": "here", "marks": [mark]}]}]}
+    assert anchor_before(long, "c1") == "x" * 40
+
+
+def test_a_new_comment_on_a_passage_records_where_it_sits(tmp_path):
+    inbox, store = make(tmp_path)
+    doc = {"type": "doc", "content": [{"type": "paragraph", "content": [
+        {"type": "text", "text": "Before the "},
+        {"type": "text", "text": "a passage", "marks": [{"type": "comment", "attrs": {"id": "c1"}}]}]}]}
+    inbox.o.structure = lambda doc_id: doc
+    inbox.record(comment("c1", PERSON), "webhook")
+    inbox.record(comment("c2", AGENT, parent="c1"), "webhook")
+    rows = {r["id"]: r["anchor_before"] for r in store.db.execute("SELECT id, anchor_before FROM comment").fetchall()}
+    assert rows == {"c1": "Before the ", "c2": None}
+    assert [r["id"] for r in store.without_anchor_before()] == []
+
+
+def test_after_a_change_each_passage_is_placed_again_or_marked_lost(tmp_path):
+    inbox, store = make(tmp_path)
+    inbox.o.structure = lambda doc_id: {}
+    inbox.record(comment("c1", PERSON), "webhook")
+    inbox.record(comment("c3", PERSON), "webhook")
+    assert sorted(r["id"] for r in store.without_anchor_before()) == ["c1", "c3"]
+    inbox.o.structure = lambda doc_id: {"type": "doc", "content": [{"type": "paragraph", "content": [
+        {"type": "text", "text": "Kept: "},
+        {"type": "text", "text": "a passage", "marks": [{"type": "comment", "attrs": {"id": "c1"}}]}]}]}
+    assert inbox.place("doc-1") == (1, 1)
+    rows = {r["id"]: (r["anchor_before"], r["anchor_lost"]) for r in
+            store.db.execute("SELECT id, anchor_before, anchor_lost FROM comment").fetchall()}
+    assert rows == {"c1": ("Kept: ", 0), "c3": (None, 1)}
+    assert list(store.without_anchor_before()) == []
