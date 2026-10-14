@@ -224,3 +224,38 @@ def test_an_empty_paragraph_does_not_stop_the_changes_above_it(tmp_path):
     [(_, doc, status, detail)] = s.publish_status(["report.md"])
     assert "four days" in o.docs[doc["id"]]["text"], o.docs[doc["id"]]["text"]
     assert status == "ok", detail
+
+
+class OutlineRefusesPatches(FakeOutline):
+    """An Outline that takes no patch at all: every patch is counted and changes nothing."""
+
+    def __init__(self):
+        super().__init__()
+        self.patches = 0
+
+    def patch(self, doc_id: str, find: str, text: str) -> dict:
+        self.patches += 1
+        return dict(self.docs[doc_id])
+
+
+def test_a_patch_outline_will_not_take_is_not_sent_again_until_the_file_changes(tmp_path):
+    # every patch is an update to the document, and a failed one used to be retried on every pass:
+    # 81,566 updates in a day on 17 documents, each a revision and a webhook delivery
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "notes.md").write_text("# Notes\n\nFirst line.\n\nSecond line.\n")
+    o = OutlineRefusesPatches()
+    s = Syncer(o, Store(tmp_path / "margin.db"), Repo(name="repo", path=root))
+    s.publish_status(["notes.md"])
+    (root / "notes.md").write_text("# Notes\n\nFirst line, changed.\n\nSecond line.\n")
+    [(_, _, status, _)] = s.publish_status(["notes.md"])
+    assert status == "cannot-patch"
+    tried = o.patches
+    assert tried > 0
+    for _ in range(3):
+        [(_, _, status, _)] = s.publish_status(["notes.md"])
+        assert status == "cannot-patch"
+    assert o.patches == tried, f"{o.patches - tried} more patches sent for a file that did not change"
+    (root / "notes.md").write_text("# Notes\n\nFirst line, changed again.\n\nSecond line.\n")
+    s.publish_status(["notes.md"])
+    assert o.patches > tried, "a new version of the file is tried again"

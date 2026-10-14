@@ -50,7 +50,7 @@ DEFAULT_STATE = Path(os.environ.get("MARGIN_STATE", "~/.local/state/margin/margi
 ALWAYS_EXCLUDE = ["**/.git/**", "**/node_modules/**", "**/.venv/**", "**/venv/**",
                   "**/__pycache__/**", "**/.playwright-mcp/**", "**/dist/**", "**/build/**",
                   "**/.pytest_cache/**", "**/.mypy_cache/**", "**/.ruff_cache/**", "**/.tox/**",
-                  "**/*.egg-info/**", "**/.eggs/**", "**/.history/**"]
+                  "**/*.egg-info/**", "**/.eggs/**", "**/.history/**", "**/site-packages/**"]
 
 
 @dataclass
