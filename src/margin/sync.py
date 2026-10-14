@@ -90,22 +90,39 @@ def files(repo: Repo) -> list[str]:
 
     A linked folder is walked like a real one (a skills folder whose skills are links to where
     each package keeps it): unwalked, its documents read as gone from the repo. A folder already
-    walked under another name is not walked again, so a link to an ancestor cannot loop."""
+    walked under another name is not walked again, so a link to an ancestor cannot loop.
+
+    A repository inside another repository is skipped: it is someone else's code cloned into a
+    project (a library's documentation, a vendored model zoo), not the project's own writing. A
+    folder of projects that is not a repository keeps each project, even though each has its own
+    `.git`."""
     import os
     excludes = ALWAYS_EXCLUDE + repo.exclude
     md_only = all(p.lower().endswith(".md") for p in repo.include)
     out = []
     seen: set[str] = set()
+    in_repo = {os.path.realpath(repo.path): (Path(repo.path) / ".git").exists()}
     for dirpath, dirnames, filenames in os.walk(repo.path, followlinks=True):
         real = os.path.realpath(dirpath)
         if real in seen:
             dirnames[:] = []
             continue
         seen.add(real)
+        inside = in_repo.get(real, False)
         base = Path(dirpath).relative_to(repo.path).as_posix()
         base = "" if base == "." else base + "/"
-        # a folder is skipped when anything inside it would be excluded
-        dirnames[:] = sorted(d for d in dirnames if not _match(f"{base}{d}/x", excludes))
+        # a folder is skipped when anything inside it would be excluded, or when it is a
+        # repository of its own inside a repository
+        keep = []
+        for d in sorted(dirnames):
+            if _match(f"{base}{d}/x", excludes):
+                continue
+            own = os.path.exists(os.path.join(dirpath, d, ".git"))
+            if own and inside:
+                continue
+            in_repo[os.path.realpath(os.path.join(dirpath, d))] = inside or own
+            keep.append(d)
+        dirnames[:] = keep
         for name in sorted(filenames):
             if md_only and not name.lower().endswith(".md"):
                 continue          # cheap: most of a big folder is not markdown at all
@@ -524,6 +541,14 @@ class Syncer:
             return Result(key, "created")
 
         repo_changed = ident != row["base_repo"]
+        failed_key = f"failed:{row['doc_id']}"
+        if (row["status"] == "cannot-patch" and repo_changed and not self.full
+                and self.s.get(failed_key) == ident):
+            # ⛔ NOT AGAIN FOR THE SAME FILE (2026-10-14). Every patch is an update to the document
+            # (a revision, a webhook delivery), and a version Outline would not take was sent again
+            # on every pass: 81,566 updates in a day on 17 documents. It is tried again when the file
+            # changes, or with --full; until then it stays reported as cannot-patch.
+            return Result(key, "cannot-patch", row["detail"] if "detail" in row.keys() else None)
         dirty_key = f"dirty:{row['doc_id']}"
         if not (repo_changed or self.full or self.s.get(dirty_key) or row["status"] != "ok"):
             return Result(key, "unchanged")       # nothing says either side moved: no API call
@@ -566,6 +591,7 @@ class Syncer:
             now = self.o.document(row["doc_id"])["text"]
             self.s.save_doc(self.repo.name, key, row["doc_id"], row["collection_id"],
                             row["base_repo"], now, "cannot-patch", str(e))
+            self.s.put(failed_key, ident)          # this version is not sent again (above)
             return Result(key, "cannot-patch", str(e))
         if title != doc["title"]:
             self.o.set_title(row["doc_id"], title)

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- A version of a file that Outline would not take is not sent again until the file changes (or `--full`). Every patch is an update to the document, and a failed one was retried on every pass, thousands of times a day on the same few documents. It stays reported as `cannot-patch`.
+- A Python environment's `site-packages` and a repository cloned inside another repository are skipped: they hold other people's documentation, not the project's. A folder of projects that is not a repository keeps each project.
 - A comment on a picture names the picture ("the picture Bedroom TV", from its caption) instead of reading as a comment on the whole document. Outline gives such a comment no anchor text, so margin reads the document's structure (API version 3) to find the picture holding it.
 - `margin accept-merged --undo TEXT` names a part of the person's Outline edit they agreed to undo, so the file's version wins there while every other line of their edit must still be in the file.
 - A document that no `routes` entry names now sends its comments to whoever last ran `margin link` on it, read from the optional `[notify] author_command`, and to the repo's `route` only when nobody is recorded.

@@ -61,3 +61,21 @@ def test_the_pin_lifts_once_the_main_folder_has_the_text_or_the_file_is_gone(tmp
     s.run()
     assert "docs/new.md" not in s.pins()
     assert s.s.doc("repo", "docs/new.md")["status"] == "missing-file"
+
+
+def test_files_skip_a_python_environment_and_a_repository_cloned_inside_another(tmp_path):
+    from margin.config import Repo
+    from margin.sync import files
+    root = tmp_path / "projects"
+    for d in ("mine/.git", "mine/notes", "mine/vendor/models/.git", "mine/vendor/models/docs",
+              "env/lib/python3.6/site-packages/ray"):
+        (root / d).mkdir(parents=True)
+    (root / "top.md").write_text("# top\n")
+    (root / "mine/notes/plan.md").write_text("# plan\n")
+    (root / "mine/vendor/models/docs/README.md").write_text("# someone else's\n")
+    (root / "env/lib/python3.6/site-packages/ray/README.md").write_text("# a library\n")
+    # his own projects under a folder of projects are repositories of their own, and are kept;
+    # a repository inside one of them is a clone of someone else's code
+    assert files(Repo(name="p", path=root)) == ["mine/notes/plan.md", "top.md"]
+    (root / ".git").mkdir()
+    assert files(Repo(name="p", path=root)) == ["top.md"], "inside a repository, a nested one is skipped"
