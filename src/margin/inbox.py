@@ -5,7 +5,8 @@ comments newer than the newest one it has seen, so a comment made while this pro
 while the Mac slept is still delivered. Both paths write to the same table, keyed by comment id,
 so a comment that arrives both ways is recorded once.
 
-The agent's own comments are never recorded, so the agent cannot wake itself.
+The agent's own comments are recorded as already delivered and with no route, so an app can show
+a whole thread while the agent never wakes itself.
 """
 from __future__ import annotations
 
@@ -89,8 +90,7 @@ class Inbox:
         return f"the picture {found[0]}" if found else None
 
     def record(self, c: dict, via: str) -> bool:
-        if c.get("createdById") == self.agent_id:
-            return False
+        own = c.get("createdById") == self.agent_id
         rec = {
             "id": c["id"], "document_id": c["documentId"], "parent_id": c.get("parentCommentId"),
             "author_id": c.get("createdById"), "author": (c.get("createdBy") or {}).get("name"),
@@ -98,10 +98,13 @@ class Inbox:
             "anchor": c.get("anchorText") or (None if c.get("parentCommentId")
                                               else self.picture_of(c["documentId"], c["id"])),
             "created_at": c["createdAt"], "mentions_agent": self.agent_id in mentions(c.get("data")),
-            "route": self.route_of(c["documentId"]), "via": via,
+            "route": None if own else self.route_of(c["documentId"]), "via": via,
+            "resolved_at": c.get("resolvedAt"),
+            # the agent's own comment is kept for reading a thread, and is never work for it
+            "delivered_at": time.time() if own else None,
         }
         with self.lock:
-            return self.s.add_comment(rec)
+            return self.s.add_comment(rec) and not own
 
     def on_webhook(self, event: dict) -> str:
         kind = event.get("event")
@@ -124,6 +127,8 @@ class Inbox:
             with self.lock:
                 self.s.db.execute("UPDATE comment SET text=? WHERE id=? AND delivered_at IS NULL",
                                   (comment_text(model.get("data")), model["id"]))
+                # a resolve or a reopen arrives as an update of the thread's first comment
+                self.s.set_resolved(model["id"], model.get("resolvedAt"))
             return "updated"
         return "recorded" if self.record(model, "webhook") else "known"
 
