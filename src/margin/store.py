@@ -31,7 +31,9 @@ CREATE TABLE IF NOT EXISTS comment (
   route TEXT,                                      -- NULL when the document is not one margin syncs
   via TEXT NOT NULL,                               -- webhook | poll
   delivered_at REAL, batch_id TEXT,
-  resolved_at TEXT                                 -- when the thread was resolved, if it was
+  resolved_at TEXT,                                -- when the thread was resolved, if it was
+  anchor_before TEXT,                              -- the words before the passage in its paragraph
+  anchor_lost INTEGER NOT NULL DEFAULT 0           -- 1 when its passage has no mark left in the text
 );
 CREATE INDEX IF NOT EXISTS comment_pending ON comment(route) WHERE delivered_at IS NULL;
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
@@ -84,10 +86,12 @@ class Store:
         self.db = _Locked(self._db, self.lock)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(SCHEMA)
-        # a store made before resolved_at existed gains the column
+        # a store made before a column existed gains it
         cols = {r["name"] for r in self.db.execute("PRAGMA table_info(comment)").fetchall()}
-        if "resolved_at" not in cols:
-            self.db.execute("ALTER TABLE comment ADD COLUMN resolved_at TEXT")
+        for col, kind in (("resolved_at", "TEXT"), ("anchor_before", "TEXT"),
+                          ("anchor_lost", "INTEGER NOT NULL DEFAULT 0")):
+            if col not in cols:
+                self.db.execute(f"ALTER TABLE comment ADD COLUMN {col} {kind}")
 
     # ---- docs
     def doc(self, repo: str, path: str):
@@ -121,13 +125,31 @@ class Store:
         `delivered_at` set is kept for reading and never handed on as work."""
         cur = self.db.execute(
             "INSERT OR IGNORE INTO comment(id,document_id,parent_id,author_id,author,text,anchor,"
-            "created_at,received_at,mentions_agent,route,via,delivered_at,resolved_at) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "created_at,received_at,mentions_agent,route,via,delivered_at,resolved_at,anchor_before) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (c["id"], c["document_id"], c.get("parent_id"), c.get("author_id"), c.get("author"),
              c.get("text"), c.get("anchor"), c["created_at"], time.time(),
              int(bool(c.get("mentions_agent"))), c.get("route"), c["via"], c.get("delivered_at"),
-             c.get("resolved_at")))
+             c.get("resolved_at"), c.get("anchor_before")))
         return cur.rowcount == 1
+
+    def set_place(self, comment_id: str, before: str | None) -> None:
+        """Where a comment's passage sits: the words before it in its paragraph ("" when it opens
+        it), or None when the text has no mark for it any more (anchor_lost)."""
+        self.db.execute("UPDATE comment SET anchor_before=?, anchor_lost=? WHERE id=?",
+                        (before, int(before is None), comment_id))
+
+    def anchored(self, document_id: str) -> list[str]:
+        """The comments that open a thread on a passage of the document."""
+        return [r["id"] for r in self.db.execute(
+            "SELECT id FROM comment WHERE document_id=? AND parent_id IS NULL AND anchor IS NOT NULL "
+            "AND anchor <> ''", (document_id,)).fetchall()]
+
+    def without_anchor_before(self):
+        """Comments on a passage whose place in the document is not recorded yet."""
+        return self.db.execute("SELECT id, document_id FROM comment WHERE parent_id IS NULL AND "
+                               "anchor IS NOT NULL AND anchor <> '' AND anchor_before IS NULL "
+                               "AND anchor_lost = 0 ORDER BY document_id").fetchall()
 
     def set_resolved(self, comment_id: str, at: str | None) -> None:
         """When a thread was resolved, or None when it was opened again."""

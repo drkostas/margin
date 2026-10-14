@@ -26,6 +26,43 @@ from .outline import Outline, OutlineError, comment_text, doc_url, mentions
 from .store import Store
 
 EVENTS = ["comments.create", "comments.update", "documents.update"]
+#: how many characters before a passage are kept to find it again
+BEFORE = 40
+
+
+def anchor_before(doc: dict | None, comment_id: str) -> str | None:
+    """The text before a comment's passage in its paragraph (at most BEFORE characters, "" when the
+    passage opens the paragraph), or None when the document has no mark for the comment. A passage's
+    words alone can appear many times in a document ("search", "Network"); with the words before it
+    a reader finds the place the comment is on."""
+    found: list[str] = []
+
+    def text_of(n: dict) -> str:
+        if n.get("type") == "text":
+            return n.get("text") or ""
+        if n.get("type") == "mention":
+            return "@" + ((n.get("attrs") or {}).get("label") or "")
+        return "".join(text_of(c) for c in n.get("content") or [] if isinstance(c, dict))
+
+    def walk(n) -> None:
+        if not isinstance(n, dict) or found:
+            return
+        kids = [c for c in n.get("content") or [] if isinstance(c, dict)]
+        if any(c.get("type") == "text" for c in kids):
+            # a block of running text: its marked child opens the passage
+            seen = ""
+            for c in kids:
+                if any(m.get("type") == "comment" and (m.get("attrs") or {}).get("id") == comment_id
+                       for m in c.get("marks") or []):
+                    found.append(seen[-BEFORE:])
+                    return
+                seen += text_of(c)
+            return
+        for c in kids:
+            walk(c)
+
+    walk(doc or {})
+    return found[0] if found else None
 
 
 def verify(secret: str | None, header: str | None, body: bytes, tolerance: float = 300) -> bool:
@@ -89,6 +126,28 @@ class Inbox:
         walk(doc or {}, None)
         return f"the picture {found[0]}" if found else None
 
+    def before_of(self, document_id: str, comment_id: str) -> str | None:
+        """Where a comment's passage sits (anchor_before), read from the document's marks."""
+        try:
+            return anchor_before(self.o.structure(document_id), comment_id)
+        except Exception:                        # noqa: BLE001 - the comment is kept either way
+            return None
+
+    def place(self, document_id: str) -> tuple[int, int]:
+        """Record again where each thread's passage sits in a document, after its text changed
+        (margin patched it, or a person edited it in Outline): (placed, lost). A passage whose text
+        was rewritten loses its mark in Outline, and a reader must not guess a place for it."""
+        try:
+            doc = self.o.structure(document_id)
+        except Exception:                        # noqa: BLE001 - try again at the next change
+            return 0, 0
+        placed = lost = 0
+        for cid in self.s.anchored(document_id):
+            before = anchor_before(doc, cid)
+            self.s.set_place(cid, before)
+            placed, lost = placed + (before is not None), lost + (before is None)
+        return placed, lost
+
     def record(self, c: dict, via: str) -> bool:
         own = c.get("createdById") == self.agent_id
         rec = {
@@ -100,6 +159,8 @@ class Inbox:
             "created_at": c["createdAt"], "mentions_agent": self.agent_id in mentions(c.get("data")),
             "route": None if own else self.route_of(c["documentId"]), "via": via,
             "resolved_at": c.get("resolvedAt"),
+            "anchor_before": (self.before_of(c["documentId"], c["id"])
+                              if c.get("anchorText") and not c.get("parentCommentId") else None),
             # the agent's own comment is kept for reading a thread, and is never work for it
             "delivered_at": time.time() if own else None,
         }
