@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS comment (
   mentions_agent INTEGER NOT NULL DEFAULT 0,
   route TEXT,                                      -- NULL when the document is not one margin syncs
   via TEXT NOT NULL,                               -- webhook | poll
-  delivered_at REAL, batch_id TEXT
+  delivered_at REAL, batch_id TEXT,
+  resolved_at TEXT                                 -- when the thread was resolved, if it was
 );
 CREATE INDEX IF NOT EXISTS comment_pending ON comment(route) WHERE delivered_at IS NULL;
 CREATE TABLE IF NOT EXISTS kv (k TEXT PRIMARY KEY, v TEXT);
@@ -83,6 +84,10 @@ class Store:
         self.db = _Locked(self._db, self.lock)
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript(SCHEMA)
+        # a store made before resolved_at existed gains the column
+        cols = {r["name"] for r in self.db.execute("PRAGMA table_info(comment)").fetchall()}
+        if "resolved_at" not in cols:
+            self.db.execute("ALTER TABLE comment ADD COLUMN resolved_at TEXT")
 
     # ---- docs
     def doc(self, repo: str, path: str):
@@ -112,14 +117,21 @@ class Store:
 
     # ---- comments
     def add_comment(self, c: dict) -> bool:
-        """Record a comment once. Returns True when it is new."""
+        """Record a comment once. Returns True when it is new. A comment stored with
+        `delivered_at` set is kept for reading and never handed on as work."""
         cur = self.db.execute(
             "INSERT OR IGNORE INTO comment(id,document_id,parent_id,author_id,author,text,anchor,"
-            "created_at,received_at,mentions_agent,route,via) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+            "created_at,received_at,mentions_agent,route,via,delivered_at,resolved_at) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (c["id"], c["document_id"], c.get("parent_id"), c.get("author_id"), c.get("author"),
              c.get("text"), c.get("anchor"), c["created_at"], time.time(),
-             int(bool(c.get("mentions_agent"))), c.get("route"), c["via"]))
+             int(bool(c.get("mentions_agent"))), c.get("route"), c["via"], c.get("delivered_at"),
+             c.get("resolved_at")))
         return cur.rowcount == 1
+
+    def set_resolved(self, comment_id: str, at: str | None) -> None:
+        """When a thread was resolved, or None when it was opened again."""
+        self.db.execute("UPDATE comment SET resolved_at=? WHERE id=?", (at, comment_id))
 
     def pending(self):
         return self.db.execute("SELECT * FROM comment WHERE delivered_at IS NULL AND route IS NOT "
