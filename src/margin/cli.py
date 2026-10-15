@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import json
 import sys
 import time
@@ -81,7 +82,32 @@ def main(argv: list[str] | None = None) -> int:
                    help="text from a part of their edit the person agreed to undo (repeatable)")
     sub.add_parser("setup-claude")
     sub.add_parser("anchors", help="record where each older comment's passage sits in its document")
+    p = sub.add_parser("fold", help="fold a markdown file into five levels of detail, each checked")
+    p.add_argument("file")
+    p.add_argument("--out", help="write the fold as JSON here")
+    p.add_argument("--html", help="write a page to read the fold here")
+    p.add_argument("--model", default="sonnet")
+    p.add_argument("--judge-model", default="opus")
     a = ap.parse_args(argv)
+
+    if a.cmd == "fold":
+        from functools import partial
+        from pathlib import Path as P
+        from .fold import ask_claude, ask_judge, fold_file
+        cache = P(os.environ.get("MARGIN_FOLD_CACHE", "~/.cache/margin/folds")).expanduser()
+        f = fold_file(P(a.file), out=P(a.out) if a.out else None, html_out=P(a.html) if a.html else None,
+                      cache=cache, ask=partial(ask_claude, model=a.model),
+                      judge=partial(ask_judge, model=a.judge_model))
+        c = f["counts"]
+        print(f"folded {a.file}: {c['units']} paragraphs, {c['claude']} by Claude, "
+              f"{c['author']} kept in the author's words, {c['calls']} calls")
+        for s in f["sections"]:
+            for u in s["units"]:
+                if u["source"] == "author":
+                    print(f"  author's words: {u['id']}: {'; '.join(u['refused'])}")
+            if s["section"]["source"] == "author":
+                print(f"  section in the author's words: {s['id']}: {'; '.join(s['section']['refused'])}")
+        return 0
 
     from pathlib import Path
     cfg = load(Path(a.config).expanduser())
