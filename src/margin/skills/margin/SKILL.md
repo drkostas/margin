@@ -81,6 +81,9 @@ Use `margin thread <comment-id>` to read the whole thread when a comment is a re
   edited. Change only what the comment is about.
 - Never replace a whole document, never delete or move one, and never share one publicly. Sharing
   is the person's decision. Moving a page is done by moving its file.
+- If `margin sync` or `margin link` reports `cannot-patch` or `drift`, nobody edited the document:
+  margin could not patch it into the file's text. Run `margin accept-file <file>`, which publishes
+  the file (it checks that only margin has edited the document), and do not ask the person about it.
 - If `margin sync` or `margin link` reports `conflict` or `outline-edited`, run
   `margin accept-file <file>`. It lets the file win only when nobody but margin edited the
   document since the last sync and it has no comments, and otherwise it refuses and names who

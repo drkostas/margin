@@ -30,6 +30,37 @@ class CannotPatch(Exception):
     replace on a document that may carry comments; it reports the document instead."""
 
 
+#: a run of asterisks that starts with an escaped one: Outline writes two literal asterisks as `\**`
+#: when it saves a whole body and as `\*\*` when it saves a patch
+_ESCAPED_RUN = re.compile(r"\\\*(?:\\?\*)*")
+
+
+def spelled(line: str) -> str:
+    r"""A line with the two spellings Outline itself varies made one: an escaped run of asterisks
+    (`\**` and `\*\*`) and a hard line break (a backslash at the end of the line), which a patch
+    writes where a whole-body save wrote a plain newline. Nothing else: `\*a\*` and `*a*` stay apart,
+    because they mean different things."""
+    line = _ESCAPED_RUN.sub(lambda m: "\\" + "*" * m.group(0).count("*"), line)
+    return line[:-1] if line.endswith("\\") and not line.endswith("\\\\") else line
+
+
+def spelled_alike(a: str, b: str) -> bool:
+    """Whether two texts differ only in the spellings `spelled` makes one."""
+    return a == b or [spelled(x) for x in a.split("\n")] == [spelled(x) for x in b.split("\n")]
+
+
+def adopt(current: str, target: str) -> str:
+    """The target with every line that is spelled alike in `current` written as `current` writes
+    it, so a plan changes only what really differs and never chases Outline's own spelling."""
+    a, b = current.split("\n"), target.split("\n")
+    out = b[:]
+    ops = SequenceMatcher(None, [spelled(x) for x in a], [spelled(x) for x in b], autojunk=False).get_opcodes()
+    for tag, i1, i2, j1, j2 in ops:
+        if tag == "equal":
+            out[j1:j2] = a[i1:i2]
+    return "\n".join(out)
+
+
 def apply(text: str, patches: list[Patch]) -> str:
     for find, repl in patches:
         if find not in text:
@@ -54,6 +85,21 @@ def _offsets(tokens: list[str]) -> list[int]:
     for t in tokens:
         out.append(out[-1] + len(t))
     return out
+
+
+#: the markers that come in pairs: bold, bold, strike-through and a code span
+_PAIRED = re.compile(r"(?<!\\)(\*\*|__|~~|`)")
+
+
+def _cuts_markup(piece: str) -> bool:
+    r"""Whether a piece of a line holds one half of a paired marker. ⛔ Outline parses a patch's text
+    on its own, so a lone `**` comes back escaped: a patch that changed the words after `**Sweep`
+    left `\**Sweep ...:\**` in the document, the bold gone (2026-10-16, fifteen documents at
+    cannot-patch). Such a change is patched as its whole line."""
+    counts: dict[str, int] = {}
+    for m in _PAIRED.finditer(piece):
+        counts[m.group(1)] = counts.get(m.group(1), 0) + 1
+    return any(n % 2 for n in counts.values())
 
 
 def _words(lines: list[str], i: int, new: str) -> list[Patch] | None:
@@ -91,6 +137,8 @@ def _words(lines: list[str], i: int, new: str) -> list[Patch] | None:
             else:
                 return None
         repl = "".join(old_t[left:s1]) + "".join(new_t[t1:t2]) + "".join(old_t[s2:right])
+        if _cuts_markup(find) or _cuts_markup(repl):
+            return None           # the whole line, so Outline reads both halves of every marker
         lines[i] = lines[i][:at[left]] + repl + lines[i][at[right]:]
         out.append((find, repl))
         old_t = old_t[:s1] + new_t[t1:t2] + old_t[s2:]   # right of here now reads as the target

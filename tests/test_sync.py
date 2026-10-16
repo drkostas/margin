@@ -259,3 +259,32 @@ def test_a_patch_outline_will_not_take_is_not_sent_again_until_the_file_changes(
     (root / "notes.md").write_text("# Notes\n\nFirst line, changed again.\n\nSecond line.\n")
     s.publish_status(["notes.md"])
     assert o.patches > tried, "a new version of the file is tried again"
+
+
+class OutlineSpellsPatchesItsOwnWay(FakeOutline):
+    """Outline as it is: a patch's result spells two literal asterisks `\\*\\*` and ends a line of a
+    paragraph with a backslash, where a whole-body save wrote `\\**` and a plain newline."""
+
+    def patch(self, doc_id: str, find: str, text: str) -> dict:
+        super().patch(doc_id, find, text)
+        # Outline stores the patched document in its own spelling, whatever the patch said
+        d = self.docs[doc_id]
+        d["text"] = d["text"].replace("\\**", "\\*\\*").replace("stop\n", "stop\\\n")
+        return dict(d)
+
+
+def test_outlines_own_spelling_of_a_patch_is_published_not_cannot_patch(tmp_path):
+    # 2026-10-16: fifteen documents (and two of purchases' notes) stayed at cannot-patch, "find text
+    # not present: '\\**'", because a hunk set aside for its spelling broke the hunks planned after it
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "note.md").write_text("# Note\n\nIntro.\n\nOld section.\n")
+    o = OutlineSpellsPatchesItsOwnWay()
+    s = Syncer(o, Store(tmp_path / "margin.db"), Repo(name="repo", path=root))
+    s.publish_status(["note.md"])
+    (root / "note.md").write_text("# Note\n\nIntro, longer now.\n\nA price of \\** 3, then stop\nand go on.\n\n"
+                                  "**Bold** section, rewritten whole.\n")
+    [(_, doc, status, detail)] = s.publish_status(["note.md"])
+    assert status == "ok", (status, detail, o.docs[doc["id"]]["text"])
+    text = o.docs[doc["id"]]["text"]
+    assert "Intro, longer now." in text and "rewritten whole" in text and "Old section" not in text

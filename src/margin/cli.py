@@ -223,10 +223,17 @@ def main(argv: list[str] | None = None) -> int:
                 elif d:
                     # The document exists but does not say what the file says. A link printed here
                     # read as "published" and a chat reported a section that never reached Outline.
+                    # ⭐ which kind it is, so a chat neither stops to ask about an edit nobody made
+                    # nor forces its file over one a person did make (2026-10-16)
+                    why = (" Nobody edited it: margin could not patch it into the file's text. "
+                           "`margin accept-file` publishes the file when only margin has edited it."
+                           if status in ("cannot-patch", "drift") else
+                           " Someone may have edited it in Outline: `margin accept-file` publishes the "
+                           "file only if nobody did, and otherwise names who did.")
                     print(f"not published: {name}/{rel} is {status}"
                           + (f" ({detail})" if detail else "")
                           + f". The document still has the older text: [{d['title']}]"
-                          f"({doc_url(cfg.url, d)})", file=sys.stderr)
+                          f"({doc_url(cfg.url, d)}).{why}", file=sys.stderr)
                     bad = 1
                 else:
                     print(f"not published: {name}/{rel} is excluded by the repo's include or "
