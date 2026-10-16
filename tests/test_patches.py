@@ -133,3 +133,39 @@ def test_widen_makes_each_patch_cross_a_block_boundary():
         p = plan(doc, target, widen=w)
         assert apply(doc, p) == target
         assert all(sum(1 for x in f.split("\n") if not x.strip()) >= w for f, _ in p)
+
+
+def test_outlines_two_spellings_of_escaped_asterisks_and_line_breaks_are_alike():
+    # 2026-10-16: saved whole Outline writes `\**` and plain newlines, saved through a patch `\*\*`
+    # and a backslash at each line's end; fifteen documents never matched their file for it
+    from margin.patches import spelled_alike
+    assert spelled_alike("a \\*\\* b\nstop\\\nnext", "a \\** b\nstop\nnext")
+    assert spelled_alike("\\*\\*\\*", "\\***")
+
+
+def test_only_those_spellings_are_alike():
+    from margin.patches import spelled_alike
+    assert not spelled_alike("\\*a\\*", "*a*")              # literal asterisks against italics
+    assert not spelled_alike("a \\** b", "a ** b")
+    assert not spelled_alike("x\\\\", "x")                  # an escaped backslash is not a line break
+    assert not spelled_alike("one", "two")
+
+
+def test_adopt_keeps_outlines_spelling_of_lines_that_are_alike():
+    from margin.patches import adopt
+    current = "Price \\*\\* 3\nstop\\\nthe old line"
+    target = "Price \\** 3\nstop\nthe new line"
+    assert adopt(current, target) == "Price \\*\\* 3\nstop\\\nthe new line"
+
+
+def test_a_word_patch_never_holds_one_half_of_a_marker():
+    # 2026-10-16: a patch "**Sweep" -> "**Sweep (gone" made Outline escape the lone `**`, and the
+    # document read `\**Sweep ...:\**`, the bold gone; such a change patches its whole line
+    from margin.patches import _cuts_markup, apply, plan
+    cur = "Intro.\n\n**Sweep:** runs every flow.\n"
+    tgt = "Intro.\n\n**Sweep (gone):** runs every flow.\n"
+    patches = plan(cur, tgt)
+    assert apply(cur, patches) == tgt
+    assert not any(_cuts_markup(f) or _cuts_markup(r) for f, r in patches), patches
+    assert _cuts_markup("**Sweep") and _cuts_markup("a `b") and not _cuts_markup("**a** and `b`")
+    assert not _cuts_markup("\\** literal")              # an escaped marker is not a marker

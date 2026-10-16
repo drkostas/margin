@@ -25,7 +25,7 @@ from pathlib import Path, PurePosixPath
 from . import images
 from .config import ALWAYS_EXCLUDE, Repo
 from .outline import Outline, OutlineError
-from .patches import CannotPatch, apply, plan
+from .patches import CannotPatch, adopt, apply, plan, spelled_alike
 from .store import Store, repo_lock
 
 
@@ -465,7 +465,7 @@ class Syncer:
         if target.startswith(current) and target[len(current):].startswith("\n\n"):
             # only new blocks at the end: append them, which leaves every existing block alone
             current = self.o.append(doc_id, target[len(current):])["text"]
-            if current == target:
+            if spelled_alike(current, target):
                 return
         # ⚠️ ONE HUNK OUTLINE WILL NOT TAKE MUST NOT STOP THE OTHERS (2026-10-12). Outline keeps an
         # empty paragraph a patch tries to remove (it reads as a third newline between blocks), and
@@ -476,8 +476,14 @@ class Syncer:
         failed: set = set()
         widen = 0
         budget = 2 * len(plan(current, target, 0)) + 4 * tries
-        while budget > 0 and current != target:
-            hunks = [h for h in plan(current, target, widen) if h not in failed]
+        # ⭐ OUTLINE SPELLS SOME TEXT TWO WAYS (2026-10-16). Saved whole, two literal asterisks are `\**`
+        # and a paragraph's lines end in plain newlines; saved through a patch, the same text comes
+        # back as `\*\*` and with hard breaks (a backslash at each line's end). The target is the
+        # whole-body spelling, so those hunks never matched and fifteen documents stayed at
+        # cannot-patch, retried on every pass. Lines spelled alike keep Outline's own spelling
+        # (patches.adopt), and a result spelled alike counts as the one expected.
+        while budget > 0 and not spelled_alike(current, target):
+            hunks = [h for h in plan(current, adopt(current, target), widen) if h not in failed]
             if not hunks:
                 if widen + 1 >= tries:
                     break
@@ -485,12 +491,17 @@ class Syncer:
                 continue
             for find, repl in hunks:
                 budget -= 1
+                if find not in current:
+                    # ⛔ planned to follow a hunk that was set aside or spelled differently: plan
+                    # again from what Outline has. It used to end the pass with "find text not present"
+                    break
                 expected = apply(current, [(find, repl)])
                 current = self.o.patch(doc_id, find, repl)["text"]
                 if current != expected:
-                    failed.add((find, repl))
+                    if not spelled_alike(current, expected):
+                        failed.add((find, repl))
                     break
-        if current != target and loose(current) != loose(target):
+        if not spelled_alike(current, target) and loose(current) != loose(target):
             raise CannotPatch("Outline's text still differs from the file after widening")
 
     def only_margin_edited(self, doc: dict) -> bool:
@@ -600,6 +611,8 @@ class Syncer:
             status, detail = "ok", None
         elif loose(after) == loose(target):
             status, detail = "ok", "only blank lines differ from the file"
+        elif spelled_alike(after, target):
+            status, detail = "ok", "only Outline's spelling of escapes and line breaks differs from the file"
         else:
             status, detail = ("drift", "after patching, Outline's text differs from the file as "
                                        "Outline renders it")
