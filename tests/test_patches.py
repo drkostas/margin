@@ -169,3 +169,24 @@ def test_a_word_patch_never_holds_one_half_of_a_marker():
     assert not any(_cuts_markup(f) or _cuts_markup(r) for f, r in patches), patches
     assert _cuts_markup("**Sweep") and _cuts_markup("a `b") and not _cuts_markup("**a** and `b`")
     assert not _cuts_markup("\\** literal")              # an escaped marker is not a marker
+
+
+def test_the_spaces_before_an_inline_picture_are_outlines_spelling():
+    # 2026-10-16: through a patch Outline writes `[  ![` and three spaces between two pictures
+    from margin.patches import spelled_alike
+    assert spelled_alike("[ ![badge](/a)](https://x) and ![b](/b)", "[  ![badge](/a)](https://x) and   ![b](/b)")
+    assert not spelled_alike("    ![a](/a)", " ![a](/a)")          # indentation at a line's start counts
+
+
+def test_a_change_to_a_table_patches_the_whole_table_across_its_blank_lines():
+    # 2026-10-16: Outline took no patch that began inside a table, and rows added at its end came
+    # back as a paragraph after it with the second row lost
+    from margin.patches import apply, plan
+    cur = "Intro.\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n## Next\n\nText."
+    tgt = "Intro.\n\n| a | b |\n|---|---|\n| 1 | 2 |\n| 3 | 4 |\n| 5 | 6 |\n\n## Next\n\nText."
+    patches = plan(cur, tgt)
+    assert apply(cur, patches) == tgt
+    [(find, repl)] = patches
+    assert find.startswith("\n| a | b |") and find.endswith("| 1 | 2 |\n"), find
+    word = plan("Intro.\n\n| a | b |\n|---|---|\n| 1 | old |\n", "Intro.\n\n| a | b |\n|---|---|\n| 1 | new |\n")
+    assert all("| a | b |" in f for f, _ in word), word        # a changed cell too, never one word alone

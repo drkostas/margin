@@ -35,12 +35,19 @@ class CannotPatch(Exception):
 _ESCAPED_RUN = re.compile(r"\\\*(?:\\?\*)*")
 
 
+#: a run of spaces after text and before an inline picture
+_BEFORE_PICTURE = re.compile(r"(?<=\S) +(?=!\[)")
+
+
 def spelled(line: str) -> str:
-    r"""A line with the two spellings Outline itself varies made one: an escaped run of asterisks
-    (`\**` and `\*\*`) and a hard line break (a backslash at the end of the line), which a patch
-    writes where a whole-body save wrote a plain newline. Nothing else: `\*a\*` and `*a*` stay apart,
+    r"""A line with the spellings Outline itself varies made one: an escaped run of asterisks
+    (`\**` and `\*\*`), a hard line break (a backslash at the end of the line), which a patch
+    writes where a whole-body save wrote a plain newline, and the spaces before an inline picture. Nothing else: `\*a\*` and `*a*` stay apart,
     because they mean different things."""
     line = _ESCAPED_RUN.sub(lambda m: "\\" + "*" * m.group(0).count("*"), line)
+    # spaces between text and an inline picture: a patch writes one more (`[  ![`, three between two
+    # pictures), and markdown shows a run of spaces as one; indentation at a line's start is kept
+    line = _BEFORE_PICTURE.sub(" ", line)
     return line[:-1] if line.endswith("\\") and not line.endswith("\\\\") else line
 
 
@@ -102,11 +109,18 @@ def _cuts_markup(piece: str) -> bool:
     return any(n % 2 for n in counts.values())
 
 
+def _is_row(line: str) -> bool:
+    """A line of a markdown table."""
+    return line.lstrip().startswith("|")
+
+
 def _words(lines: list[str], i: int, new: str) -> list[Patch] | None:
     """Patches that turn line `i` of `lines` into `new`, touching only the words that changed. Each
     is unique in the whole document when it is applied, and they go right to left so the rest of
     the line still reads as it did. None when a change cannot be made unique inside its line.
     `lines` is updated as the patches are planned."""
+    if _is_row(lines[i]) or _is_row(new):
+        return None               # a table is patched whole (plan)
     old_t, new_t = _TOKEN.findall(lines[i]), _TOKEN.findall(new)
     if not old_t or not new_t or "".join(old_t) != lines[i]:
         return None
@@ -186,6 +200,24 @@ def plan(current: str, target: str, widen: int = 0) -> list[Patch]:
                 k -= 1
                 continue
         lo, hi, blo, bhi = i1, i2, j1, j2
+        # ⛔ A TABLE IS PATCHED WHOLE (2026-10-16). Outline took no patch that began inside a table:
+        # rows added at its end came back as a paragraph after it, the second row lost, and every
+        # later pass failed on the same table. A hunk that touches a table line, or sits right
+        # against one, covers the whole table and the blank line on each side, so it crosses blocks
+        # and Outline takes the path that keeps everything.
+        up_limit = ops[k - 1][1] if k > 0 and ops[k - 1][0] == "equal" else lo
+        near = work[lo:hi] + b[blo:bhi] + work[max(lo - 1, 0):lo] + work[hi:hi + 1]
+        if any(_is_row(x) for x in near):
+            # lines above the hunk, down to the run left unchanged, are the current's and the
+            # target's alike; lines below it already read as the target (the hunks go bottom-up)
+            while lo > up_limit and _is_row(work[lo - 1]):
+                lo, blo = lo - 1, blo - 1
+            if lo > up_limit and not work[lo - 1].strip():
+                lo, blo = lo - 1, blo - 1
+            while hi < len(work) and _is_row(work[hi]):
+                hi, bhi = hi + 1, bhi + 1
+            if hi < len(work) and not work[hi].strip():
+                hi, bhi = hi + 1, bhi + 1
         while True:
             # how far up we may borrow context: the unchanged run directly above the hunk
             up_limit = ops[k - 1][1] if k > 0 and ops[k - 1][0] == "equal" else lo
