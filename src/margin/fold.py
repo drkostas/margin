@@ -44,8 +44,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 #: a change to the prompt, the schema or the checks changes this, so no cached fold outlives it
-PROMPT_VERSION = "fold-4"
+PROMPT_VERSION = "fold-5"
 FORMAT = "margin-fold"
+#: the refusals that mean nobody answered, not that an answer was wrong
+UNANSWERED = ("the call failed:", "the judge could not check it:")
 LEVELS = ["topic", "takeaway", "key", "brief", "full"]
 
 #: the lengths the prompt asks for (words)
@@ -399,11 +401,21 @@ For each unit, answer:
   built from the words of the evidence sentences. Every number, date, version, name, file and code
   word in it must appear in those sentences exactly as written there. Keep every "not", "never",
   "no" and "without" that the meaning needs. Name the thing itself, never "this paragraph".
+  The point is the unit's main claim, never only its setup or a side detail: a unit that tells the
+  reader to do something gives the instruction with its target (the file, command or path); a unit
+  that lists or quotes several things covers the whole, not its first item.
+  Keep exactly: who does what (who asked, who said, who holds it), which number or name belongs to
+  which thing, the time (what was true before stays "was" or "before", never stated as now), the
+  scope (never narrow "A or B" to "only A", never widen "half of one line" to the whole), and which
+  steps are alternatives and which are separate.
 - reason: ONE more sentence of at most {KEY_MAX - POINT_MAX} words with the most important further
   thing the unit says (its reason, condition or consequence when it gives one), from the unit's own
   sentences, not restating the point. Write "because" or "so" only where the sentences do. "" for a
   unit of one short sentence.
-- topic: at most {TOPIC_MAX} words copied from the point, naming what the unit is about.
+- topic: at most {TOPIC_MAX} words copied from the point or its evidence sentences, naming the unit's
+  own subject (the thing, file, device, service or rule it is about), so a reader can find this unit
+  among the others; never a phrase that fits other units too ("process as gkos", "four things",
+  "now required"), and never a date or a side detail.
 For the section: takeaway, ONE sentence of at most {SECTION_MAX} words stating what the section
 establishes, from the points of its units; topic, at most {TOPIC_MAX} words copied from it;
 rests_on, the ids of the units it rests on.
@@ -454,8 +466,11 @@ the same thing, the same quantities and names, the same negations, and any link 
 "because", "therefore", "then" or "so that" also said there. A line vaguer than the sentences but
 true is stated. A line ending in /reason is judged as a statement on its own: it need not be the
 cause of the point unless it says "because", "so" or the like. A line that adds a claim, joins two sentences into a claim neither makes, reverses
-a relation, or changes who does what is not stated. A topic is stated when it names what its unit
-or section is about.
+a relation, or changes who does what is not stated. So is a line that puts a number or name on a
+different thing, states as current what the sentences say was true before, narrows a scope ("only
+A" where they say "A or B") or widens one ("all of X" where they say part of X), or makes a separate
+step one of two alternatives. A topic is stated when it names what its unit or section is about,
+specifically enough to tell it apart from the other units here.
 Work line by line. First find the sentences that state it and list them in support, each as
 "<unit id>:<sentence number>" (for example "{sec.units[0].id}:0"). Then read the line again against
 only those sentences, word by word: who does what, to what, and any "so" or "because". Then decide.
@@ -619,7 +634,10 @@ def fold_section(doc: Doc, sec: Section, ask=ask_claude, cache: Path | None = No
                    "refused": problems.get("section", ["no answer"])}
     out = {"id": sec.id, "title": sec.title, "depth": sec.depth, "section": section,
            "units": units, "calls": calls}
-    if hit:
+    # a section left in the author's words because a call failed (a usage limit, a timeout) is not
+    # kept: the next run asks again, where a cached copy would show the failure for ever
+    unanswered = any(p.startswith(UNANSWERED) for ps in problems.values() for p in ps)
+    if hit and not unanswered:
         hit.parent.mkdir(parents=True, exist_ok=True)
         hit.write_text(json.dumps(out))
     return out

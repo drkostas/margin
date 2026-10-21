@@ -179,6 +179,38 @@ def test_a_good_fold_is_claudes_and_is_cached(tmp_path):
     assert again["cached"] and len(calls) == 1
 
 
+def test_a_failed_call_is_not_cached(tmp_path):
+    d = section_doc()
+    sec = d.sections[0]
+
+    def limited(prompt, **kw):
+        raise RuntimeError("claude exited 1: usage_limit_reached")
+
+    out = F.fold_section(d, sec, limited, cache=tmp_path, judge=stated)
+    assert out["units"][0]["source"] == "author" and not list(tmp_path.iterdir())
+    good = {"units": [{**GOOD, "id": sec.units[0].id}],
+            "section": {"takeaway": "The job did not run on 2026-10-12 because the disk was full.",
+                        "topic": "disk was full", "rests_on": [sec.units[0].id]}}
+    ask, calls = fake([good])
+    again = F.fold_section(d, sec, ask, cache=tmp_path, judge=stated)
+    assert not again.get("cached") and again["units"][0]["source"] == "claude" and len(calls) == 1
+
+
+def test_a_judge_that_cannot_answer_is_not_cached(tmp_path):
+    d = section_doc()
+    sec = d.sections[0]
+    good = {"units": [{**GOOD, "id": sec.units[0].id}],
+            "section": {"takeaway": "The job did not run on 2026-10-12 because the disk was full.",
+                        "topic": "disk was full", "rests_on": [sec.units[0].id]}}
+    ask, _ = fake([good, good])
+
+    def down(prompt, **kw):
+        raise RuntimeError("timed out")
+
+    out = F.fold_section(d, sec, ask, cache=tmp_path, judge=down)
+    assert out["units"][0]["source"] == "author" and not list(tmp_path.iterdir())
+
+
 def test_a_refused_line_is_asked_again_with_the_reason():
     d = section_doc()
     uid = d.sections[0].units[0].id
