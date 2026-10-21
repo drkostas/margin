@@ -44,8 +44,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 #: a change to the prompt, the schema or the checks changes this, so no cached fold outlives it
-PROMPT_VERSION = "fold-4"
+PROMPT_VERSION = "fold-5"
 FORMAT = "margin-fold"
+#: the refusals that mean nobody answered, not that an answer was wrong
+UNANSWERED = ("the call failed:", "the judge could not check it:")
 LEVELS = ["topic", "takeaway", "key", "brief", "full"]
 
 #: the lengths the prompt asks for (words)
@@ -399,11 +401,21 @@ For each unit, answer:
   built from the words of the evidence sentences. Every number, date, version, name, file and code
   word in it must appear in those sentences exactly as written there. Keep every "not", "never",
   "no" and "without" that the meaning needs. Name the thing itself, never "this paragraph".
+  The point is the unit's main claim, never only its setup or a side detail: a unit that tells the
+  reader to do something gives the instruction with its target (the file, command or path); a unit
+  that lists or quotes several things covers the whole, not its first item.
+  Keep exactly: who does what (who asked, who said, who holds it), which number or name belongs to
+  which thing, the time (what was true before stays "was" or "before", never stated as now), the
+  scope (never narrow "A or B" to "only A", never widen "half of one line" to the whole), and which
+  steps are alternatives and which are separate.
 - reason: ONE more sentence of at most {KEY_MAX - POINT_MAX} words with the most important further
   thing the unit says (its reason, condition or consequence when it gives one), from the unit's own
   sentences, not restating the point. Write "because" or "so" only where the sentences do. "" for a
   unit of one short sentence.
-- topic: at most {TOPIC_MAX} words copied from the point, naming what the unit is about.
+- topic: at most {TOPIC_MAX} words copied from the point or its evidence sentences, naming the unit's
+  own subject (the thing, file, device, service or rule it is about), so a reader can find this unit
+  among the others; never a phrase that fits other units too ("process as gkos", "four things",
+  "now required"), and never a date or a side detail.
 For the section: takeaway, ONE sentence of at most {SECTION_MAX} words stating what the section
 establishes, from the points of its units; topic, at most {TOPIC_MAX} words copied from it;
 rests_on, the ids of the units it rests on.
@@ -454,8 +466,11 @@ the same thing, the same quantities and names, the same negations, and any link 
 "because", "therefore", "then" or "so that" also said there. A line vaguer than the sentences but
 true is stated. A line ending in /reason is judged as a statement on its own: it need not be the
 cause of the point unless it says "because", "so" or the like. A line that adds a claim, joins two sentences into a claim neither makes, reverses
-a relation, or changes who does what is not stated. A topic is stated when it names what its unit
-or section is about.
+a relation, or changes who does what is not stated. So is a line that puts a number or name on a
+different thing, states as current what the sentences say was true before, narrows a scope ("only
+A" where they say "A or B") or widens one ("all of X" where they say part of X), or makes a separate
+step one of two alternatives. A topic is stated when it names what its unit or section is about,
+specifically enough to tell it apart from the other units here.
 Work line by line. First find the sentences that state it and list them in support, each as
 "<unit id>:<sentence number>" (for example "{sec.units[0].id}:0"). Then read the line again against
 only those sentences, word by word: who does what, to what, and any "so" or "because". Then decide.
@@ -619,7 +634,10 @@ def fold_section(doc: Doc, sec: Section, ask=ask_claude, cache: Path | None = No
                    "refused": problems.get("section", ["no answer"])}
     out = {"id": sec.id, "title": sec.title, "depth": sec.depth, "section": section,
            "units": units, "calls": calls}
-    if hit:
+    # a section left in the author's words because a call failed (a usage limit, a timeout) is not
+    # kept: the next run asks again, where a cached copy would show the failure for ever
+    unanswered = any(p.startswith(UNANSWERED) for ps in problems.values() for p in ps)
+    if hit and not unanswered:
         hit.parent.mkdir(parents=True, exist_ok=True)
         hit.write_text(json.dumps(out))
     return out
@@ -645,7 +663,11 @@ def fold(markdown: str, *, ask=ask_claude, cache: Path | None = None, jobs: int 
 # ------------------------------------------------------------------------------------------
 def page(folded: dict) -> str:
     def esc(s):
-        return html.escape(s or "")
+        # the document's own marks for code, bold and italics are drawn, not shown as characters
+        out = html.escape(s or "")
+        out = re.sub(r"`([^`]+)`", r"<code>\1</code>", out)
+        out = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", out)
+        return re.sub(r"(?<![\w*])\*([^*\s][^*]*?)\*(?![\w*])", r"<i>\1</i>", out)
 
     secs = []
     for s in folded["sections"]:
@@ -675,18 +697,46 @@ nav button.on{{background:#6b5ce7;color:#fff;border-color:#6b5ce7}}
 .L1,.L2,.L3,.L4,.L5{{display:none}} body[data-l="1"] .L1,body[data-l="2"] .L2,body[data-l="3"] .L3,
 body[data-l="4"] .L4,body[data-l="5"] .L5{{display:block}} body[data-l="5"] .u{{display:none}}
 .w{{background:#f1eefc;border-radius:3px}} .card{{border:1px solid #8884;border-radius:10px;padding:.6rem .8rem}}
-small{{opacity:.7}}</style></head><body data-l="1">
+small{{opacity:.7}} main{{touch-action:pan-x pan-y}} code{{font-size:.9em;background:#8882;padding:0 .2em;border-radius:3px}}
+#lv{{position:fixed;left:50%;top:40%;transform:translate(-50%,-50%);padding:.5rem 1rem;border-radius:10px;
+background:#6b5ce7;color:#fff;font-weight:600;opacity:0;transition:opacity .25s;pointer-events:none}}
+#lv.on{{opacity:.92}}</style></head><body data-l="1">
 <h1>{esc(folded["title"])}</h1>
 <nav>{"".join(f'<button data-l="{n}">{n} {t}</button>' for n, t in
               ((1, "Full"), (2, "Brief"), (3, "Key"), (4, "Takeaway"), (5, "Topic")))}</nav>
 <small>Tinted lines are written by Claude and checked against the text. Untinted lines are the
 author's words. {c["claude"]} of {c["units"]} paragraphs folded by Claude, {c["author"]} kept in the
 author's words.</small>
-{"".join(secs)}
+<main>{"".join(secs)}</main><div id="lv"></div>
 <script>
 const set=l=>{{document.body.dataset.l=l;document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.l==l))}};
 document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>set(b.dataset.l));
 addEventListener('keydown',e=>{{if('12345'.includes(e.key))set(e.key)}});set('1');
+// a pinch moves one level: fingers together folds more, apart opens more. The paragraph under the
+// fingers keeps its place on screen, and the browser's own zoom is off inside the document only.
+const NAMES={{1:'Full',2:'Brief',3:'Key',4:'Takeaway',5:'Topic'}};
+const lv=document.getElementById('lv');let hide;
+const step=(d,x,y)=>{{const cur=+document.body.dataset.l,next=Math.min(5,Math.max(1,cur+d));
+  if(next===cur)return;const at=document.elementFromPoint(x,y);
+  // at Topic the paragraphs are hidden, so the section is what stays under the fingers
+  const anchor=at&&((next<5&&at.closest('.u'))||at.closest('section'));
+  const r0=anchor&&anchor.getBoundingClientRect(),frac=r0&&r0.height?Math.min(1,Math.max(0,(y-r0.top)/r0.height)):0;
+  set(String(next));
+  if(anchor&&anchor.offsetParent){{const r1=anchor.getBoundingClientRect();scrollBy(0,r1.top-(y-frac*r1.height))}}
+  lv.textContent=next+' '+NAMES[next];lv.classList.add('on');clearTimeout(hide);hide=setTimeout(()=>lv.classList.remove('on'),700);
+  window.pinches=(window.pinches||0)+1}};
+const main=document.querySelector('main');let base=0;
+const span=t=>Math.hypot(t[0].clientX-t[1].clientX,t[0].clientY-t[1].clientY);
+main.addEventListener('touchstart',e=>{{if(e.touches.length===2)base=span(e.touches)}},{{passive:true}});
+main.addEventListener('touchmove',e=>{{if(e.touches.length!==2)return;e.preventDefault();if(!base)return;
+  const r=span(e.touches)/base,x=(e.touches[0].clientX+e.touches[1].clientX)/2,y=(e.touches[0].clientY+e.touches[1].clientY)/2;
+  // one level a pinch: after a step the gesture does nothing more until the fingers lift
+  if(r<0.7){{step(1,x,y);base=0}}else if(r>1.4){{step(-1,x,y);base=0}}}},{{passive:false}});
+main.addEventListener('touchend',e=>{{if(e.touches.length<2)base=0}});
+// a trackpad pinch arrives as ctrl+wheel events; one level a gesture, which ends at a 300 ms pause
+let wheel=0,done=false,quiet;addEventListener('wheel',e=>{{if(!e.ctrlKey)return;e.preventDefault();
+  clearTimeout(quiet);quiet=setTimeout(()=>{{wheel=0;done=false}},300);if(done)return;wheel+=e.deltaY;
+  if(Math.abs(wheel)>60){{step(wheel>0?1:-1,e.clientX,e.clientY);done=true}}}},{{passive:false}});
 </script></body></html>"""
 
 

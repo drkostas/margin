@@ -179,6 +179,38 @@ def test_a_good_fold_is_claudes_and_is_cached(tmp_path):
     assert again["cached"] and len(calls) == 1
 
 
+def test_a_failed_call_is_not_cached(tmp_path):
+    d = section_doc()
+    sec = d.sections[0]
+
+    def limited(prompt, **kw):
+        raise RuntimeError("claude exited 1: usage_limit_reached")
+
+    out = F.fold_section(d, sec, limited, cache=tmp_path, judge=stated)
+    assert out["units"][0]["source"] == "author" and not list(tmp_path.iterdir())
+    good = {"units": [{**GOOD, "id": sec.units[0].id}],
+            "section": {"takeaway": "The job did not run on 2026-10-12 because the disk was full.",
+                        "topic": "disk was full", "rests_on": [sec.units[0].id]}}
+    ask, calls = fake([good])
+    again = F.fold_section(d, sec, ask, cache=tmp_path, judge=stated)
+    assert not again.get("cached") and again["units"][0]["source"] == "claude" and len(calls) == 1
+
+
+def test_a_judge_that_cannot_answer_is_not_cached(tmp_path):
+    d = section_doc()
+    sec = d.sections[0]
+    good = {"units": [{**GOOD, "id": sec.units[0].id}],
+            "section": {"takeaway": "The job did not run on 2026-10-12 because the disk was full.",
+                        "topic": "disk was full", "rests_on": [sec.units[0].id]}}
+    ask, _ = fake([good, good])
+
+    def down(prompt, **kw):
+        raise RuntimeError("timed out")
+
+    out = F.fold_section(d, sec, ask, cache=tmp_path, judge=down)
+    assert out["units"][0]["source"] == "author" and not list(tmp_path.iterdir())
+
+
 def test_a_refused_line_is_asked_again_with_the_reason():
     d = section_doc()
     uid = d.sections[0].units[0].id
@@ -224,6 +256,15 @@ def test_the_whole_document_and_its_page():
     assert folded["counts"]["author"] == 4          # empty lines are refused, never shown as Claude's
     page = F.page(folded)
     assert "Backups on the Mac" in page and 'data-l="5"' in page
+    assert "touchmove" in page and "ctrlKey" in page and "touch-action:pan-x pan-y" in page
+
+
+def test_the_page_draws_code_bold_and_italics():
+    folded = {"title": "T", "counts": {"claude": 0, "units": 1, "author": 1}, "sections": [{
+        "id": "s", "title": "S", "depth": 1, "units": [],
+        "section": {"source": "author", "topic": "t", "takeaway": "Run `a <b>` with **care**, *now*, 2*3*4."}}]}
+    page = F.page(folded)
+    assert "<code>a &lt;b&gt;</code>" in page and "<b>care</b>" in page and "<i>now</i>" in page and "2*3*4" in page
     json.dumps(folded)
 
 
