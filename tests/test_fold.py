@@ -256,6 +256,15 @@ def test_the_whole_document_and_its_page():
     assert folded["counts"]["author"] == 4          # empty lines are refused, never shown as Claude's
     page = F.page(folded)
     assert "Backups on the Mac" in page and 'data-l="5"' in page
+    assert "touchmove" in page and "ctrlKey" in page and "touch-action:pan-x pan-y" in page
+
+
+def test_the_page_draws_code_bold_and_italics():
+    folded = {"title": "T", "counts": {"claude": 0, "units": 1, "author": 1}, "sections": [{
+        "id": "s", "title": "S", "depth": 1, "units": [],
+        "section": {"source": "author", "topic": "t", "takeaway": "Run `a <b>` with **care**, *now*, 2*3*4."}}]}
+    page = F.page(folded)
+    assert "<code>a &lt;b&gt;</code>" in page and "<b>care</b>" in page and "<i>now</i>" in page and "2*3*4" in page
     json.dumps(folded)
 
 

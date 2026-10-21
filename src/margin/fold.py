@@ -663,7 +663,11 @@ def fold(markdown: str, *, ask=ask_claude, cache: Path | None = None, jobs: int 
 # ------------------------------------------------------------------------------------------
 def page(folded: dict) -> str:
     def esc(s):
-        return html.escape(s or "")
+        # the document's own marks for code, bold and italics are drawn, not shown as characters
+        out = html.escape(s or "")
+        out = re.sub(r"`([^`]+)`", r"<code>\1</code>", out)
+        out = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", out)
+        return re.sub(r"(?<![\w*])\*([^*\s][^*]*?)\*(?![\w*])", r"<i>\1</i>", out)
 
     secs = []
     for s in folded["sections"]:
@@ -693,18 +697,46 @@ nav button.on{{background:#6b5ce7;color:#fff;border-color:#6b5ce7}}
 .L1,.L2,.L3,.L4,.L5{{display:none}} body[data-l="1"] .L1,body[data-l="2"] .L2,body[data-l="3"] .L3,
 body[data-l="4"] .L4,body[data-l="5"] .L5{{display:block}} body[data-l="5"] .u{{display:none}}
 .w{{background:#f1eefc;border-radius:3px}} .card{{border:1px solid #8884;border-radius:10px;padding:.6rem .8rem}}
-small{{opacity:.7}}</style></head><body data-l="1">
+small{{opacity:.7}} main{{touch-action:pan-x pan-y}} code{{font-size:.9em;background:#8882;padding:0 .2em;border-radius:3px}}
+#lv{{position:fixed;left:50%;top:40%;transform:translate(-50%,-50%);padding:.5rem 1rem;border-radius:10px;
+background:#6b5ce7;color:#fff;font-weight:600;opacity:0;transition:opacity .25s;pointer-events:none}}
+#lv.on{{opacity:.92}}</style></head><body data-l="1">
 <h1>{esc(folded["title"])}</h1>
 <nav>{"".join(f'<button data-l="{n}">{n} {t}</button>' for n, t in
               ((1, "Full"), (2, "Brief"), (3, "Key"), (4, "Takeaway"), (5, "Topic")))}</nav>
 <small>Tinted lines are written by Claude and checked against the text. Untinted lines are the
 author's words. {c["claude"]} of {c["units"]} paragraphs folded by Claude, {c["author"]} kept in the
 author's words.</small>
-{"".join(secs)}
+<main>{"".join(secs)}</main><div id="lv"></div>
 <script>
 const set=l=>{{document.body.dataset.l=l;document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('on',b.dataset.l==l))}};
 document.querySelectorAll('nav button').forEach(b=>b.onclick=()=>set(b.dataset.l));
 addEventListener('keydown',e=>{{if('12345'.includes(e.key))set(e.key)}});set('1');
+// a pinch moves one level: fingers together folds more, apart opens more. The paragraph under the
+// fingers keeps its place on screen, and the browser's own zoom is off inside the document only.
+const NAMES={{1:'Full',2:'Brief',3:'Key',4:'Takeaway',5:'Topic'}};
+const lv=document.getElementById('lv');let hide;
+const step=(d,x,y)=>{{const cur=+document.body.dataset.l,next=Math.min(5,Math.max(1,cur+d));
+  if(next===cur)return;const at=document.elementFromPoint(x,y);
+  // at Topic the paragraphs are hidden, so the section is what stays under the fingers
+  const anchor=at&&((next<5&&at.closest('.u'))||at.closest('section'));
+  const r0=anchor&&anchor.getBoundingClientRect(),frac=r0&&r0.height?Math.min(1,Math.max(0,(y-r0.top)/r0.height)):0;
+  set(String(next));
+  if(anchor&&anchor.offsetParent){{const r1=anchor.getBoundingClientRect();scrollBy(0,r1.top-(y-frac*r1.height))}}
+  lv.textContent=next+' '+NAMES[next];lv.classList.add('on');clearTimeout(hide);hide=setTimeout(()=>lv.classList.remove('on'),700);
+  window.pinches=(window.pinches||0)+1}};
+const main=document.querySelector('main');let base=0;
+const span=t=>Math.hypot(t[0].clientX-t[1].clientX,t[0].clientY-t[1].clientY);
+main.addEventListener('touchstart',e=>{{if(e.touches.length===2)base=span(e.touches)}},{{passive:true}});
+main.addEventListener('touchmove',e=>{{if(e.touches.length!==2)return;e.preventDefault();if(!base)return;
+  const r=span(e.touches)/base,x=(e.touches[0].clientX+e.touches[1].clientX)/2,y=(e.touches[0].clientY+e.touches[1].clientY)/2;
+  // one level a pinch: after a step the gesture does nothing more until the fingers lift
+  if(r<0.7){{step(1,x,y);base=0}}else if(r>1.4){{step(-1,x,y);base=0}}}},{{passive:false}});
+main.addEventListener('touchend',e=>{{if(e.touches.length<2)base=0}});
+// a trackpad pinch arrives as ctrl+wheel events; one level a gesture, which ends at a 300 ms pause
+let wheel=0,done=false,quiet;addEventListener('wheel',e=>{{if(!e.ctrlKey)return;e.preventDefault();
+  clearTimeout(quiet);quiet=setTimeout(()=>{{wheel=0;done=false}},300);if(done)return;wheel+=e.deltaY;
+  if(Math.abs(wheel)>60){{step(wheel>0?1:-1,e.clientX,e.clientY);done=true}}}},{{passive:false}});
 </script></body></html>"""
 
 
