@@ -74,7 +74,7 @@ def test_files_skip_a_python_environment_and_a_repository_cloned_inside_another(
     (root / "mine/notes/plan.md").write_text("# plan\n")
     (root / "mine/vendor/models/docs/README.md").write_text("# someone else's\n")
     (root / "env/lib/python3.6/site-packages/ray/README.md").write_text("# a library\n")
-    # his own projects under a folder of projects are repositories of their own, and are kept;
+    # a user's own projects under a folder of projects are repositories of their own, and are kept;
     # a repository inside one of them is a clone of someone else's code
     assert files(Repo(name="p", path=root)) == ["mine/notes/plan.md", "top.md"]
     (root / ".git").mkdir()

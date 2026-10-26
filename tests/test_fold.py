@@ -10,7 +10,7 @@ title: ignored front matter
 ---
 # Backups on the Mac
 
-Every night at 03:30 the backup job dumps 14 databases to pi1. It keeps fourteen nights.
+Every night at 03:30 the backup job dumps 14 databases to nas1. It keeps fourteen nights.
 
 ## Why it failed
 
@@ -22,10 +22,10 @@ two days. The `db-backup.sh` script now refuses to start below 10% free disk.
 
 | set | size |
 |---|---|
-| drlab | 3.2 GB |
+| records | 3.2 GB |
 
 ```sh
-launchctl kickstart gui/501/dev.gkos.db-backup
+launchctl kickstart gui/501/org.example.db-backup
 ```
 """
 
@@ -94,7 +94,7 @@ def test_an_added_not_is_caught():
 
 
 def test_a_swapped_name_is_caught():
-    assert any("pi2" in p for p in planted(point="The job did not run on 2026-10-12 because pi2 was full."))
+    assert any("nas2" in p for p in planted(point="The job did not run on 2026-10-12 because nas2 was full."))
 
 
 def test_a_code_word_must_be_exact():
@@ -226,7 +226,7 @@ def test_a_refused_line_is_asked_again_with_the_reason():
 def test_two_refusals_leave_the_authors_words_marked():
     d = section_doc()
     uid = d.sections[0].units[0].id
-    wrong = {"units": [{**GOOD, "id": uid, "point": "The job ran on 2026-10-12 because pi2 was full."}],
+    wrong = {"units": [{**GOOD, "id": uid, "point": "The job ran on 2026-10-12 because nas2 was full."}],
              "section": {"takeaway": "x", "topic": "x", "rests_on": [uid]}}
     ask, calls = fake([wrong, wrong])
     out = F.fold_section(d, d.sections[0], ask, judge=stated)

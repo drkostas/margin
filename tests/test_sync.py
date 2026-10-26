@@ -126,9 +126,9 @@ def test_accept_file_lets_the_file_win_when_only_margin_wrote_the_document(tmp_p
 def test_accept_file_refuses_a_person_or_a_comment(tmp_path):
     root, o, s, doc_id = _conflict(tmp_path)
     o.revisions[doc_id] = [{"createdAt": "2099-01-01T00:00:00Z",
-                            "createdBy": {"id": "u-kostas", "name": "Kostas"}}]
+                            "createdBy": {"id": "u-alex", "name": "Alex"}}]
     r = s.accept_file("notes.md")
-    assert r.action == "refused" and "Kostas" in r.detail
+    assert r.action == "refused" and "Alex" in r.detail
     o.revisions[doc_id] = []
     o.notes[doc_id] = [{"id": "c1"}]
     r = s.accept_file("notes.md")
@@ -148,7 +148,7 @@ def _person_edited(tmp_path):
     d = o.docs[doc["id"]]
     d["text"] = d["text"].replace("## Kind on the record", "## Subjects")
     o.revisions[doc["id"]] = [{"createdAt": "2099-01-01T00:00:00Z",
-                               "createdBy": {"id": "u-kostas", "name": "Kostas"}}]
+                               "createdBy": {"id": "u-alex", "name": "Alex"}}]
     o.notes[doc["id"]] = [{"id": "c1"}]
     (root / "notes.md").write_text("# Notes\n\n## Kind on the record\n\nFirst line.\n\nOld line.\n\nNew line.\n")
     assert s.publish_status(["notes.md"])[0][2] == "conflict"
