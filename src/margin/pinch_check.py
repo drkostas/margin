@@ -148,6 +148,9 @@ def plan() -> list[tuple[float, str, bool]]:
 WAKEFULNESS = "dumpsys power | grep -E 'mWakefulness=|mLastUserActivityTime|ms ago'"
 #: seconds nobody may have touched the phone before the test takes its screen
 QUIET = 60.0
+#: and after an attempt the person interrupted (another app came to the front), since they are
+#: using the phone: five minutes untouched before the next attempt
+QUIET_AFTER_LOSS = 300.0
 
 
 def ready(power: str, locked: bool, idle: float | None, quiet: float = QUIET) -> bool:
@@ -201,7 +204,7 @@ class PhoneLost(RuntimeError):
 
 
 def run(page: Path, serial: str, *, package: str = "com.brave.browser", out: Path | None = None,
-        adb: str = "adb", wait_unlock: float = 0.0, attempts: int = 3, sleep=time.sleep,
+        adb: str = "adb", wait_unlock: float = 0.0, attempts: int = 8, sleep=time.sleep,
         clock=time.monotonic) -> int:
     """Serve `page` to the phone, pinch it as plan() says, judge each pinch, and write the results.
     A phone that is lost in the middle (it left adb, its browser closed) is waited for again, within
@@ -213,17 +216,17 @@ def run(page: Path, serial: str, *, package: str = "com.brave.browser", out: Pat
     run_adb = android._runner(adb, None)
     end = clock() + wait_unlock
 
-    def wait_ready() -> bool:
+    def wait_ready(quiet: float = QUIET) -> bool:
         said = False
         while True:
             power = android._read(serial, run_adb, WAKEFULNESS) or ""
-            if ready(power, android.locked(serial, run_adb), android.idle_s(power)):
+            if ready(power, android.locked(serial, run_adb), android.idle_s(power), quiet):
                 break
             if clock() >= end:
                 return False
             if not said:
                 print(f"{time.strftime('%H:%M')} waiting for the phone to be awake, unlocked and untouched for "
-                      f"{QUIET:g} s", flush=True)
+                      f"{quiet:g} s", flush=True)
                 said = True
             sleep(30)
         return True
@@ -236,7 +239,7 @@ def run(page: Path, serial: str, *, package: str = "com.brave.browser", out: Pat
     rows: list[dict] | None = None
     try:
         for n in range(1, max(1, attempts) + 1):
-            if not wait_ready():
+            if not wait_ready(QUIET if n == 1 else QUIET_AFTER_LOSS):
                 print("REFUSED: the phone is locked, asleep or off adb; it is never unlocked for the test "
                       "(--wait-unlock waits)")
                 return 2
@@ -331,10 +334,14 @@ def _attempt(serial: str, package: str, url: str, port: int, out: Path, adb: str
                     time.sleep(1)
                     last_place = place
                 end = time.monotonic() + 120
+                said = None
                 while (why := android.why_not(serial, package, int(y * view["dpr"]), run_adb, idle=3.0,
                                               still=False)) is not None:
                     if "focus" in why or "locked" in why:
                         raise PhoneLost(f"not pinched: {why}")
+                    if why != said:
+                        print(f"{time.strftime('%H:%M')} waiting to pinch: {why}", flush=True)
+                        said = why
                     if time.monotonic() > end:
                         break
                     time.sleep(1)
