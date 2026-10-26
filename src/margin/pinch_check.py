@@ -181,37 +181,77 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
+class PhoneLost(RuntimeError):
+    """The phone left adb, or its browser's debugging socket went, in the middle of a run."""
+
+
 def run(page: Path, serial: str, *, package: str = "com.brave.browser", out: Path | None = None,
-        adb: str = "adb", wait_unlock: float = 0.0, sleep=time.sleep, clock=time.monotonic) -> int:
+        adb: str = "adb", wait_unlock: float = 0.0, attempts: int = 3, sleep=time.sleep,
+        clock=time.monotonic) -> int:
     """Serve `page` to the phone, pinch it as plan() says, judge each pinch, and write the results.
-    Exit 0 when every pinch passed, 1 when one failed, 2 when the test could not run."""
-    from claude_human import android, android_browser as ab, android_touch as touch   # noqa: PLC0415
+    A phone that is lost in the middle (it left adb, its browser closed) is waited for again, within
+    `wait_unlock`, and the run starts over, up to `attempts` times. Exit 0 when every pinch passed,
+    1 when one failed, 2 when the test could not run."""
+    from claude_human import android, android_browser as ab   # noqa: PLC0415
     out = Path(out or Path("/tmp/margin-pinch-check"))
     out.mkdir(parents=True, exist_ok=True)
     run_adb = android._runner(adb, None)
-    end, said = clock() + wait_unlock, False
-    while not ready(android._read(serial, run_adb, WAKEFULNESS) or "", android.locked(serial, run_adb)):
-        if clock() >= end:
-            print("REFUSED: the phone is locked or asleep; it is never unlocked for the test (--wait-unlock waits)")
-            return 2
-        if not said:
-            print(f"{time.strftime('%H:%M')} waiting for the phone to be awake and unlocked", flush=True)
-            said = True
-        sleep(30)
-    print(f"{time.strftime('%H:%M')} the phone is awake and unlocked: starting", flush=True)
+    end = clock() + wait_unlock
+
+    def wait_ready() -> bool:
+        said = False
+        while not ready(android._read(serial, run_adb, WAKEFULNESS) or "", android.locked(serial, run_adb)):
+            if clock() >= end:
+                return False
+            if not said:
+                print(f"{time.strftime('%H:%M')} waiting for the phone to be awake and unlocked", flush=True)
+                said = True
+            sleep(30)
+        return True
+
     port = _free_port()
     handler = partial(http.server.SimpleHTTPRequestHandler, directory=str(page.parent))
     server = http.server.ThreadingHTTPServer(("127.0.0.1", port), handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     url = f"http://127.0.0.1:{port}/{page.name}"
-    rec, rows = None, []
+    rows: list[dict] | None = None
     try:
-        if run_adb(["-s", serial, "reverse", f"tcp:{port}", f"tcp:{port}"])[0] != 0:
-            print("REFUSED: adb could not reverse the port to the phone")
+        for n in range(1, max(1, attempts) + 1):
+            if not wait_ready():
+                print("REFUSED: the phone is locked, asleep or off adb; it is never unlocked for the test "
+                      "(--wait-unlock waits)")
+                return 2
+            print(f"{time.strftime('%H:%M')} the phone is awake and unlocked: attempt {n}", flush=True)
+            try:
+                rows = _attempt(serial, package, url, port, out, adb, run_adb)
+                break
+            except (PhoneLost, ab.BrowserError) as e:
+                print(f"{time.strftime('%H:%M')} attempt {n} lost the phone ({str(e)[:160]}); waiting for it again",
+                      flush=True)
+                rows = None
+        if rows is None:
+            print(f"REFUSED: the phone was lost in each of {attempts} attempts")
             return 2
+    finally:
+        server.shutdown()
+    (out / "readings.json").write_text(json.dumps(rows, indent=1))
+    (out / "results.md").write_text(table(rows) + "\n")
+    print(table(rows))
+    failed = [r for r in rows if r["why"]]
+    print(f"\n{len(rows) - len(failed)} of {len(rows)} pinches passed; results in {out}")
+    return 1 if failed or not rows else 0
+
+
+def _attempt(serial: str, package: str, url: str, port: int, out: Path, adb: str, run_adb) -> list[dict]:
+    """One run of the plan on the phone. Raises PhoneLost when the phone or its browser goes."""
+    from claude_human import android, android_browser as ab, android_touch as touch   # noqa: PLC0415
+    rows: list[dict] = []
+    if run_adb(["-s", serial, "reverse", f"tcp:{port}", f"tcp:{port}"])[0] != 0:
+        raise PhoneLost("adb could not reverse the port to the phone")
+    rec = raw = None
+    try:
         if not ab.open_url(serial, package, url, run_adb):
-            print(f"REFUSED: could not open the page in {package}")
-            return 2
+            raise PhoneLost(f"could not open the page in {package}")
         page = Page(ab, serial, package, url, run_adb)
         try:
             for _ in range(30):
@@ -224,8 +264,10 @@ def run(page: Path, serial: str, *, package: str = "com.brave.browser", out: Pat
             page.eval(LISTENER)
             page.eval("set('1')")
             w, h = touch.screen_size(android._read(serial, run_adb, touch.WM_SIZE) or "") or (1080, 2400)
-            rec = subprocess.Popen([adb, "-s", serial, "shell", "screenrecord", "--time-limit", "175",
-                                    "/data/local/tmp/margin-pinch-check.mp4"])
+            # the recording streams to the computer: the phone's shell may not write a file of its own
+            raw = open(out / "pinch.h264", "wb")
+            rec = subprocess.Popen([adb, "-s", serial, "exec-out", "screenrecord", "--time-limit", "175",
+                                    "--output-format=h264", "-"], stdout=raw, stderr=subprocess.DEVNULL)
             last_place = None
             for place, direction, slow in plan():
                 if place != last_place:
@@ -235,6 +277,8 @@ def run(page: Path, serial: str, *, package: str = "com.brave.browser", out: Pat
                 report = touch.checked_pinch(serial, package, w // 2, int(h * 0.45), direction, slow=slow,
                                              idle=3.0, wait=120.0, run=run_adb)
                 if report["outcome"] != "success":
+                    if "locked" in report["why"] or "focus" in report["why"]:
+                        raise PhoneLost(f"not pinched: {report['why']}")
                     rows.append({"place": place, "direction": direction, "slow": slow, "reading": None,
                                  "why": [f"not pinched: {report['why']}"]})
                     continue
@@ -246,20 +290,14 @@ def run(page: Path, serial: str, *, package: str = "com.brave.browser", out: Pat
             page.close()
     finally:
         if rec is not None:
-            subprocess.run([adb, "-s", serial, "shell", "pkill -INT screenrecord"], capture_output=True)
+            rec.terminate()
             try:
-                rec.wait(timeout=20)
+                rec.wait(timeout=10)
             except subprocess.TimeoutExpired:
                 rec.kill()
-            time.sleep(2)
-            subprocess.run([adb, "-s", serial, "pull", "/data/local/tmp/margin-pinch-check.mp4", str(out / "pinch.mp4")],
-                           capture_output=True)
-            subprocess.run([adb, "-s", serial, "shell", "rm -f /data/local/tmp/margin-pinch-check.mp4"], capture_output=True)
+        if raw is not None:
+            raw.close()
+            subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "h264", "-i", str(out / "pinch.h264"),
+                            "-c", "copy", str(out / "pinch.mp4")], capture_output=True)
         run_adb(["-s", serial, "reverse", "--remove", f"tcp:{port}"])
-        server.shutdown()
-    (out / "readings.json").write_text(json.dumps(rows, indent=1))
-    (out / "results.md").write_text(table(rows) + "\n")
-    print(table(rows))
-    failed = [r for r in rows if r["why"]]
-    print(f"\n{len(rows) - len(failed)} of {len(rows)} pinches passed; results in {out}")
-    return 1 if failed or not rows else 0
+    return rows
