@@ -15,8 +15,12 @@ MARGIN = "margin-user"
 
 
 class FakeOutline:
-    def __init__(self, text, updated_by=MARGIN, revisions=(MARGIN,), refuse=None):
+    def __init__(self, text, updated_by=MARGIN, revisions=(MARGIN,), refuse=None, comments=()):
         self.text, self.updated_by, self.revs, self.refuse = text, updated_by, list(revisions), refuse
+        self.notes = list(comments)
+
+    def comments(self, collection_id=None, document_id=None):
+        return list(self.notes)
 
     def me(self):
         return {"id": MARGIN}
@@ -59,9 +63,11 @@ def setup(tmp_path: Path, outline_text: str, base_outline: str, file_body: str):
 
 
 def test_a_failed_patch_keeps_what_it_changed_as_the_baseline(tmp_path):
+    # a comment is anchored in it, so it stays patch-only; with none and no person's edit it would
+    # be replaced whole instead (test_sync_replace.py, 2026-10-26)
     start = "a\n\nb\n\nmid\n\nc"
     repo, store = setup(tmp_path, start, start, "a\n\nB\n\nmid\n\nC")
-    o = FakeOutline(start, refuse="c")
+    o = FakeOutline(start, refuse="c", comments=[{"id": "n1", "anchorText": "mid"}])
     first = Syncer(o, store, repo).one("doc.md", "doc.md")
     assert first.action == "cannot-patch"
     assert o.text == "a\n\nB\n\nmid\n\nc"                 # the b patch applied, the c one did not

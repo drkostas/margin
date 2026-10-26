@@ -175,6 +175,10 @@ def outline_edit(base: str, current: str) -> tuple[list[str], list[str]]:
     return added, [line for line in removed if line.strip() not in still]
 
 
+#: what a document's detail says when its whole text was replaced instead of patched
+REPLACED = "replaced: no person had edited it and it had no comments"
+
+
 class Syncer:
     def __init__(self, outline: Outline, store: Store, repo: Repo, full: bool = False):
         self.o, self.s, self.repo = outline, store, repo
@@ -521,6 +525,17 @@ class Syncer:
             return False
         return bool(revs) and all((r.get("createdBy") or {}).get("id") == me for r in revs)
 
+    def replaceable(self, doc_id: str, doc: dict) -> bool:
+        """Whether the whole text of this document may be replaced without losing anything a person
+        made: nobody but margin has edited it (only_margin_edited) and no comment is anchored in
+        it. Any comment, or any answer Outline withholds, keeps it patch-only."""
+        if not self.only_margin_edited(doc):
+            return False
+        try:
+            return not list(self.o.comments(document_id=doc_id))
+        except OutlineError:
+            return False
+
     def _parent_id(self, key: str) -> str | None:
         parent = key.rpartition("/")[0]
         if not parent:
@@ -559,6 +574,16 @@ class Syncer:
             # (a revision, a webhook delivery), and a version Outline would not take was sent again
             # on every pass: 81,566 updates in a day on 17 documents. It is tried again when the file
             # changes, or with --full; until then it stays reported as cannot-patch.
+            # ⭐ Unless nothing would be lost by replacing it whole (replaceable, 2026-10-26): then it
+            # is replaced, once per version of the file, so a chat's `margin link` publishes it
+            tried_key = f"replace-tried:{row['doc_id']}"
+            if self.s.get(tried_key) != ident:
+                self.s.put(tried_key, ident)
+                doc = self.o.document(row["doc_id"])
+                if self.replaceable(row["doc_id"], doc):
+                    body = self.resolve(body, base, row["doc_id"])
+                    self.o.replace(row["doc_id"], body)
+                    return self._finish(key, row, ident, title, doc["title"], self.canonical(body), REPLACED)
             return Result(key, "cannot-patch", row["detail"] if "detail" in row.keys() else None)
         dirty_key = f"dirty:{row['doc_id']}"
         if not (repo_changed or self.full or self.s.get(dirty_key) or row["status"] != "ok"):
@@ -590,25 +615,43 @@ class Syncer:
 
         body = self.resolve(body, base, row["doc_id"])
         target = self.canonical(body)
+        replaced = None
         try:
             if not current.strip():
                 self.o.replace(row["doc_id"], body)      # an empty document cannot hold a comment
             else:
                 self.converge(row["doc_id"], current, target)
         except CannotPatch as e:
-            # ⛔ the patches that did apply changed Outline's text: keep that text as the baseline,
-            # or the next pass reads margin's own edits as someone else's and calls it a conflict
-            # (2026-10-13, a long plan with tables). The file's baseline stays, so it is retried.
-            now = self.o.document(row["doc_id"])["text"]
-            self.s.save_doc(self.repo.name, key, row["doc_id"], row["collection_id"],
-                            row["base_repo"], now, "cannot-patch", str(e))
-            self.s.put(failed_key, ident)          # this version is not sent again (above)
-            return Result(key, "cannot-patch", str(e))
-        if title != doc["title"]:
+            if self.replaceable(row["doc_id"], doc):
+                # ⭐ A DOCUMENT NOBODY EDITED AND NOBODY COMMENTED ON IS REPLACED WHOLE (2026-10-26).
+                # A chat's plan was published by the serve pass, the chat went on rewriting it, and
+                # the patches from the first rendering to the new text failed on its tables ("still
+                # differs after widening"), so the chat's own `margin link` met a document it could
+                # not change and had to run accept-file by hand. A replace drops comment anchors and
+                # a person's edits, so it is only for a document with no comments that no person
+                # has edited, the same rule accept_file applies.
+                self.o.replace(row["doc_id"], body)
+                replaced = REPLACED
+            else:
+                # ⛔ the patches that did apply changed Outline's text: keep that text as the baseline,
+                # or the next pass reads margin's own edits as someone else's and calls it a conflict
+                # (2026-10-13, a long plan with tables). The file's baseline stays, so it is retried.
+                now = self.o.document(row["doc_id"])["text"]
+                self.s.save_doc(self.repo.name, key, row["doc_id"], row["collection_id"],
+                                row["base_repo"], now, "cannot-patch", str(e))
+                self.s.put(failed_key, ident)          # this version is not sent again (above)
+                return Result(key, "cannot-patch", str(e))
+        return self._finish(key, row, ident, title, doc["title"], target, replaced)
+
+    def _finish(self, key: str, row, ident: str, title: str, doc_title: str, target: str,
+                replaced: str | None) -> Result:
+        """After the document was patched or replaced: its title, then Outline's text against the
+        file's, and the baselines moved only when they match."""
+        if title != doc_title:
             self.o.set_title(row["doc_id"], title)
         after = self.o.document(row["doc_id"])["text"]
         if after == target:
-            status, detail = "ok", None
+            status, detail = "ok", replaced
         elif loose(after) == loose(target):
             status, detail = "ok", "only blank lines differ from the file"
         elif spelled_alike(after, target):
