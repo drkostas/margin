@@ -152,6 +152,29 @@ def ready(power: str, locked: bool) -> bool:
     return "mWakefulness=Awake" in (power or "") and not locked
 
 
+class Page:
+    """The page in the phone's browser, through its debugging socket forwarded over adb. When the port
+    stops answering (adb's connection to the phone dropped and came back, which removes its forwards),
+    `eval` forwards it again and tries once more. `ab` is claude_human.android_browser."""
+
+    def __init__(self, ab, serial: str, package: str, url: str, run_adb):
+        self.ab, self.serial, self.package, self.url, self.run = ab, serial, package, url, run_adb
+        self.port = ab.forward(serial, package, run_adb)
+
+    def eval(self, js: str):
+        try:
+            return self.ab.evaluate(self.port, self.url, js)
+        except self.ab.BrowserError as e:
+            if "did not answer" not in str(e):
+                raise
+            self.ab.unforward(self.serial, self.port, self.run)
+            self.port = self.ab.forward(self.serial, self.package, self.run)
+            return self.ab.evaluate(self.port, self.url, js)
+
+    def close(self) -> None:
+        self.ab.unforward(self.serial, self.port, self.run)
+
+
 def _free_port() -> int:
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -189,23 +212,24 @@ def run(page: Path, serial: str, *, package: str = "com.brave.browser", out: Pat
         if not ab.open_url(serial, package, url, run_adb):
             print(f"REFUSED: could not open the page in {package}")
             return 2
-        with ab.forwarded(serial, package, run_adb) as dport:
+        page = Page(ab, serial, package, url, run_adb)
+        try:
             for _ in range(30):
                 try:
-                    if ab.evaluate(dport, url, "document.readyState") == "complete":
+                    if page.eval("document.readyState") == "complete":
                         break
                 except ab.BrowserError:
                     pass
                 time.sleep(1)
-            ab.evaluate(dport, url, LISTENER)
-            ab.evaluate(dport, url, "set('1')")
+            page.eval(LISTENER)
+            page.eval("set('1')")
             w, h = touch.screen_size(android._read(serial, run_adb, touch.WM_SIZE) or "") or (1080, 2400)
             rec = subprocess.Popen([adb, "-s", serial, "shell", "screenrecord", "--time-limit", "175",
                                     "/data/local/tmp/margin-pinch-check.mp4"])
             last_place = None
             for place, direction, slow in plan():
                 if place != last_place:
-                    ab.evaluate(dport, url, f"scrollTo(0, {place} * (document.documentElement.scrollHeight - innerHeight))")
+                    page.eval(f"scrollTo(0, {place} * (document.documentElement.scrollHeight - innerHeight))")
                     time.sleep(1)
                     last_place = place
                 report = touch.checked_pinch(serial, package, w // 2, int(h * 0.45), direction, slow=slow,
@@ -215,9 +239,11 @@ def run(page: Path, serial: str, *, package: str = "com.brave.browser", out: Pat
                                  "why": [f"not pinched: {report['why']}"]})
                     continue
                 time.sleep(1.2)
-                reading = ab.evaluate(dport, url, READ)
+                reading = page.eval(READ)
                 rows.append({"place": place, "direction": direction, "slow": slow, "reading": reading,
                              "why": judge(reading, direction)})
+        finally:
+            page.close()
     finally:
         if rec is not None:
             subprocess.run([adb, "-s", serial, "shell", "pkill -INT screenrecord"], capture_output=True)

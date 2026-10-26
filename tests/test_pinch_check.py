@@ -1,5 +1,5 @@
 """pinch_check.judge: a pinch on a fold page passes only when all four limits hold."""
-from margin.pinch_check import expected, judge, plan, ready, table
+from margin.pinch_check import Page, expected, judge, plan, ready, table
 
 
 def reading(**kw):
@@ -66,3 +66,46 @@ def test_the_test_starts_only_on_an_awake_unlocked_phone():
     assert ready("  mWakefulness=Awake\n", False)
     assert not ready("  mWakefulness=Awake\n", True)
     assert not ready("  mWakefulness=Dozing\n", False) and not ready("", False)
+
+
+class FakeBrowser:
+    """claude_human.android_browser as Page uses it: the first port stops answering after one call."""
+
+    class BrowserError(RuntimeError):
+        pass
+
+    def __init__(self):
+        self.ports, self.calls, self.removed = iter([5001, 5002]), [], []
+
+    def forward(self, serial, package, run):
+        return next(self.ports)
+
+    def unforward(self, serial, port, run):
+        self.removed.append(port)
+
+    def evaluate(self, port, url, js):
+        self.calls.append((port, js))
+        if port == 5001 and len(self.calls) > 1:
+            raise self.BrowserError("the browser did not answer /json/list: connection refused")
+        if js == "throw":
+            raise self.BrowserError("the script threw: ReferenceError")
+        return js
+
+
+def test_a_port_that_stops_answering_is_forwarded_again_once():
+    ab = FakeBrowser()
+    page = Page(ab, "dev", "com.example.browser", "http://127.0.0.1:1/p.html", run_adb=None)
+    assert page.eval("a") == "a" and page.eval("b") == "b"
+    assert ab.removed == [5001] and page.port == 5002 and ab.calls[-1] == (5002, "b")
+
+
+def test_a_script_error_is_not_retried():
+    ab = FakeBrowser()
+    page = Page(ab, "dev", "com.example.browser", "http://127.0.0.1:1/p.html", run_adb=None)
+    page.port = 5002
+    try:
+        page.eval("throw")
+    except ab.BrowserError as e:
+        assert "threw" in str(e) and ab.removed == []
+    else:
+        raise AssertionError("a script error was swallowed")
