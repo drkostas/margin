@@ -21,8 +21,8 @@ recording. Exit 0 only when every pinch passed.
     margin pinch-check page.html --serial HOST:PORT [--package com.brave.browser] [--out DIR] [--wait-unlock S]
 
 The test never unlocks the phone (a PIN or a fingerprint is the person's own). With --wait-unlock it
-waits, up to that many seconds, until the phone is awake and unlocked, so it can run detached and
-start by itself the next time the person picks the phone up.
+waits, up to that many seconds, until the phone is awake, unlocked and untouched for a minute, so it
+can run detached and start by itself when the person has the phone unlocked but is not using it.
 """
 from __future__ import annotations
 
@@ -144,13 +144,17 @@ def plan() -> list[tuple[float, str, bool]]:
     return steps
 
 
-#: the phone's wakefulness, as dumpsys power prints it
-WAKEFULNESS = "dumpsys power | grep -m1 mWakefulness="
+#: the phone's wakefulness and its last input, as dumpsys power prints them
+WAKEFULNESS = "dumpsys power | grep -E 'mWakefulness=|mLastUserActivityTime|ms ago'"
+#: seconds nobody may have touched the phone before the test takes its screen
+QUIET = 60.0
 
 
-def ready(power: str, locked: bool) -> bool:
-    """Pure. Whether the phone can take the test now: awake and past its lock screen."""
-    return "mWakefulness=Awake" in (power or "") and not locked
+def ready(power: str, locked: bool, idle: float | None, quiet: float = QUIET) -> bool:
+    """Pure. Whether the phone can take the test now: awake, past its lock screen, and untouched for
+    `quiet` seconds (`idle`, from claude_human.android.idle_s), so the browser does not take the
+    screen from a person who is using the phone."""
+    return "mWakefulness=Awake" in (power or "") and not locked and idle is not None and idle >= quiet
 
 
 class Page:
@@ -211,11 +215,15 @@ def run(page: Path, serial: str, *, package: str = "com.brave.browser", out: Pat
 
     def wait_ready() -> bool:
         said = False
-        while not ready(android._read(serial, run_adb, WAKEFULNESS) or "", android.locked(serial, run_adb)):
+        while True:
+            power = android._read(serial, run_adb, WAKEFULNESS) or ""
+            if ready(power, android.locked(serial, run_adb), android.idle_s(power)):
+                break
             if clock() >= end:
                 return False
             if not said:
-                print(f"{time.strftime('%H:%M')} waiting for the phone to be awake and unlocked", flush=True)
+                print(f"{time.strftime('%H:%M')} waiting for the phone to be awake, unlocked and untouched for "
+                      f"{QUIET:g} s", flush=True)
                 said = True
             sleep(30)
         return True
@@ -232,7 +240,7 @@ def run(page: Path, serial: str, *, package: str = "com.brave.browser", out: Pat
                 print("REFUSED: the phone is locked, asleep or off adb; it is never unlocked for the test "
                       "(--wait-unlock waits)")
                 return 2
-            print(f"{time.strftime('%H:%M')} the phone is awake and unlocked: attempt {n}", flush=True)
+            print(f"{time.strftime('%H:%M')} the phone is awake, unlocked and idle: attempt {n}", flush=True)
             try:
                 rows = _attempt(serial, package, url, port, out, adb, run_adb)
                 break

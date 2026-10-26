@@ -62,10 +62,13 @@ def test_the_table_has_a_row_a_pinch_with_its_result():
     assert t[3].endswith("FAIL not pinched: the phone is locked |")
 
 
-def test_the_test_starts_only_on_an_awake_unlocked_phone():
-    assert ready("  mWakefulness=Awake\n", False)
-    assert not ready("  mWakefulness=Awake\n", True)
-    assert not ready("  mWakefulness=Dozing\n", False) and not ready("", False)
+def test_the_test_starts_only_on_an_awake_unlocked_phone_nobody_is_using():
+    assert ready("  mWakefulness=Awake\n", False, 61.0)
+    assert not ready("  mWakefulness=Awake\n", True, 61.0)
+    assert not ready("  mWakefulness=Dozing\n", False, 61.0) and not ready("", False, 61.0)
+    assert not ready("  mWakefulness=Awake\n", False, 5.0)
+    assert not ready("  mWakefulness=Awake\n", False, None)
+    assert ready("  mWakefulness=Awake\n", False, 5.0, quiet=3.0)
 
 
 class FakeBrowser:
