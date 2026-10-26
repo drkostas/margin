@@ -4,17 +4,18 @@ A fold page moves one level for each pinch and keeps the paragraph under the fin
 (fold.page). Whether it does that on a phone was a question for a person until 2026-10-26, and a page
 sent to a person to try by hand is the wrong way round: the phone can be driven over adb. This
 serves the page to the phone only (`adb reverse`, the phone's own localhost), opens it in the phone's
-Chromium browser, pinches it with two real fingers (claude-human's `android_touch`, behind the same
-checks as a tap: the app has focus, no banner or call, nobody touched the phone for a few seconds),
-reads the page after each pinch through the browser's debugging socket (`android_browser`) and judges
-four limits:
+Chromium browser, pinches it with two fingers through the browser's own synthetic gesture
+(claude-human's `android_browser.pinch`, which feeds touch events into the browser's view, since a
+phone with SELinux enforcing refuses the shell a write to its touch screen) behind the same checks as
+a tap (the app has focus, no banner or call, nobody touched the phone for a few seconds), reads the
+page after each pinch through the browser's debugging socket and judges four limits:
 
   - the level moves by exactly one, in the pinch's direction (none at the end of the scale);
   - the point of the paragraph that was under the fingers is less than 24 CSS pixels from where it was;
   - the browser's own zoom stays at 1, during the gesture and after it;
   - no frame takes longer than 50 ms from the gesture's start until the change has settled.
 
-It records the screen meanwhile and writes a table (markdown) and the readings (JSON) beside the
+It records the screen meanwhile (screen captures twice a second, made into an mp4 with ffmpeg) and writes a table (markdown) and the readings (JSON) beside the
 recording. Exit 0 only when every pinch passed.
 
     margin pinch-check page.html --serial HOST:PORT [--package com.brave.browser] [--out DIR] [--wait-unlock S]
@@ -171,6 +172,16 @@ class Page:
             self.port = self.ab.forward(self.serial, self.package, self.run)
             return self.ab.evaluate(self.port, self.url, js)
 
+    def pinch(self, x: float, y: float, scale: float, speed: float) -> None:
+        try:
+            return self.ab.pinch(self.port, self.url, x, y, scale, speed=speed)
+        except self.ab.BrowserError as e:
+            if "did not answer" not in str(e):
+                raise
+            self.ab.unforward(self.serial, self.port, self.run)
+            self.port = self.ab.forward(self.serial, self.package, self.run)
+            return self.ab.pinch(self.port, self.url, x, y, scale, speed=speed)
+
     def close(self) -> None:
         self.ab.unforward(self.serial, self.port, self.run)
 
@@ -242,13 +253,52 @@ def run(page: Path, serial: str, *, package: str = "com.brave.browser", out: Pat
     return 1 if failed or not rows else 0
 
 
+#: how far a pinch moves the fingers (their end distance over their start) and how fast (CSS px/s)
+SCALE = {"in": 0.4, "out": 2.5}
+SPEED = {False: 800.0, True: 200.0}
+
+
+class Frames:
+    """The phone's screen, captured about twice a second while the test runs (screencap works where
+    screenrecord may not write a file), and made into an mp4 with ffmpeg when it stops."""
+
+    def __init__(self, adb: str, serial: str, folder: Path, gap: float = 0.5):
+        self.adb, self.serial, self.folder, self.gap = adb, serial, folder, gap
+        self.folder.mkdir(parents=True, exist_ok=True)
+        self.stop_flag = threading.Event()
+        self.n = 0
+        self.thread = threading.Thread(target=self._loop, daemon=True)
+        self.thread.start()
+
+    def _loop(self) -> None:
+        while not self.stop_flag.is_set():
+            r = subprocess.run([self.adb, "-s", self.serial, "exec-out", "screencap", "-p"], capture_output=True,
+                               timeout=30)
+            if r.returncode == 0 and r.stdout.startswith(b"\x89PNG"):
+                self.n += 1
+                (self.folder / f"{self.n:04d}.png").write_bytes(r.stdout)
+            self.stop_flag.wait(self.gap)
+
+    def stop(self, mp4: Path) -> bool:
+        self.stop_flag.set()
+        self.thread.join(timeout=40)
+        if not self.n:
+            return False
+        r = subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-framerate", "2", "-i",
+                            str(self.folder / "%04d.png"), "-vf", "scale=540:-2", "-pix_fmt", "yuv420p", str(mp4)],
+                           capture_output=True)
+        return r.returncode == 0 and mp4.exists()
+
+
 def _attempt(serial: str, package: str, url: str, port: int, out: Path, adb: str, run_adb) -> list[dict]:
-    """One run of the plan on the phone. Raises PhoneLost when the phone or its browser goes."""
-    from claude_human import android, android_browser as ab, android_touch as touch   # noqa: PLC0415
+    """One run of the plan on the phone, each pinch made through the browser (android_browser.pinch)
+    after the same checks as a tap (android.why_not: the browser has focus, no banner or call, nobody
+    touched the phone for 3 s). Raises PhoneLost when the phone or its browser goes."""
+    from claude_human import android, android_browser as ab   # noqa: PLC0415
     rows: list[dict] = []
     if run_adb(["-s", serial, "reverse", f"tcp:{port}", f"tcp:{port}"])[0] != 0:
         raise PhoneLost("adb could not reverse the port to the phone")
-    rec = raw = None
+    frames = None
     try:
         if not ab.open_url(serial, package, url, run_adb):
             raise PhoneLost(f"could not open the page in {package}")
@@ -263,25 +313,28 @@ def _attempt(serial: str, package: str, url: str, port: int, out: Path, adb: str
                 time.sleep(1)
             page.eval(LISTENER)
             page.eval("set('1')")
-            w, h = touch.screen_size(android._read(serial, run_adb, touch.WM_SIZE) or "") or (1080, 2400)
-            # the recording streams to the computer: the phone's shell may not write a file of its own
-            raw = open(out / "pinch.h264", "wb")
-            rec = subprocess.Popen([adb, "-s", serial, "exec-out", "screenrecord", "--time-limit", "175",
-                                    "--output-format=h264", "-"], stdout=raw, stderr=subprocess.DEVNULL)
+            view = page.eval("({w: innerWidth, h: innerHeight, dpr: devicePixelRatio})")
+            x, y = view["w"] / 2, view["h"] * 0.45
+            frames = Frames(adb, serial, out / "frames")
             last_place = None
             for place, direction, slow in plan():
                 if place != last_place:
                     page.eval(f"scrollTo(0, {place} * (document.documentElement.scrollHeight - innerHeight))")
                     time.sleep(1)
                     last_place = place
-                report = touch.checked_pinch(serial, package, w // 2, int(h * 0.45), direction, slow=slow,
-                                             idle=3.0, wait=120.0, run=run_adb)
-                if report["outcome"] != "success":
-                    if "locked" in report["why"] or "focus" in report["why"]:
-                        raise PhoneLost(f"not pinched: {report['why']}")
+                end = time.monotonic() + 120
+                while (why := android.why_not(serial, package, int(y * view["dpr"]), run_adb, idle=3.0,
+                                              still=False)) is not None:
+                    if "focus" in why or "locked" in why:
+                        raise PhoneLost(f"not pinched: {why}")
+                    if time.monotonic() > end:
+                        break
+                    time.sleep(1)
+                if why is not None:
                     rows.append({"place": place, "direction": direction, "slow": slow, "reading": None,
-                                 "why": [f"not pinched: {report['why']}"]})
+                                 "why": [f"not pinched: {why}"]})
                     continue
+                page.pinch(x, y, SCALE[direction], SPEED[slow])
                 time.sleep(1.2)
                 reading = page.eval(READ)
                 rows.append({"place": place, "direction": direction, "slow": slow, "reading": reading,
@@ -289,15 +342,7 @@ def _attempt(serial: str, package: str, url: str, port: int, out: Path, adb: str
         finally:
             page.close()
     finally:
-        if rec is not None:
-            rec.terminate()
-            try:
-                rec.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                rec.kill()
-        if raw is not None:
-            raw.close()
-            subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "h264", "-i", str(out / "pinch.h264"),
-                            "-c", "copy", str(out / "pinch.mp4")], capture_output=True)
+        if frames is not None:
+            frames.stop(out / "pinch.mp4")
         run_adb(["-s", serial, "reverse", "--remove", f"tcp:{port}"])
     return rows
