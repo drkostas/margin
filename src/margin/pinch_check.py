@@ -201,7 +201,7 @@ def run(page: Path, serial: str, *, package: str = "com.brave.browser", out: Pat
             ab.evaluate(dport, url, "set('1')")
             w, h = touch.screen_size(android._read(serial, run_adb, touch.WM_SIZE) or "") or (1080, 2400)
             rec = subprocess.Popen([adb, "-s", serial, "shell", "screenrecord", "--time-limit", "175",
-                                    "/sdcard/margin-pinch-check.mp4"])
+                                    "/data/local/tmp/margin-pinch-check.mp4"])
             last_place = None
             for place, direction, slow in plan():
                 if place != last_place:
@@ -226,9 +226,9 @@ def run(page: Path, serial: str, *, package: str = "com.brave.browser", out: Pat
             except subprocess.TimeoutExpired:
                 rec.kill()
             time.sleep(2)
-            subprocess.run([adb, "-s", serial, "pull", "/sdcard/margin-pinch-check.mp4", str(out / "pinch.mp4")],
+            subprocess.run([adb, "-s", serial, "pull", "/data/local/tmp/margin-pinch-check.mp4", str(out / "pinch.mp4")],
                            capture_output=True)
-            subprocess.run([adb, "-s", serial, "shell", "rm -f /sdcard/margin-pinch-check.mp4"], capture_output=True)
+            subprocess.run([adb, "-s", serial, "shell", "rm -f /data/local/tmp/margin-pinch-check.mp4"], capture_output=True)
         run_adb(["-s", serial, "reverse", "--remove", f"tcp:{port}"])
         server.shutdown()
     (out / "readings.json").write_text(json.dumps(rows, indent=1))
