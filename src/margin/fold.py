@@ -414,7 +414,7 @@ For each unit, answer:
   unit of one short sentence.
 - topic: at most {TOPIC_MAX} words copied from the point or its evidence sentences, naming the unit's
   own subject (the thing, file, device, service or rule it is about), so a reader can find this unit
-  among the others; never a phrase that fits other units too ("process as gkos", "four things",
+  among the others; never a phrase that fits other units too ("process as root", "four things",
   "now required"), and never a date or a side detail.
 For the section: takeaway, ONE sentence of at most {SECTION_MAX} words stating what the section
 establishes, from the points of its units; topic, at most {TOPIC_MAX} words copied from it;

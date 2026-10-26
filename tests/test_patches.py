@@ -18,7 +18,7 @@ def test_one_line_change_patches_only_that_line():
     assert apply(DOC, p) == target
 
 
-QUIET = ("**Quiet nights.** Between 23:00 and 08:00 (you can change the hours in drlab › Settings) "
+QUIET = ("**Quiet nights.** Between 23:00 and 08:00 (you can change the hours in the app › Settings) "
          "nothing is pushed except a critical problem. An approval asked at night waits.")
 
 
@@ -27,7 +27,7 @@ def test_a_comment_on_unchanged_words_of_a_changed_paragraph_keeps_its_anchor():
     and the comment anchored on those words lost its highlight. Only the changed words are patched
     now, so the anchored words are in no find."""
     doc = "## Notifications\n\n" + QUIET + "\n\n## Next\n\nText."
-    target = doc.replace(" (you can change the hours in drlab › Settings)", "")
+    target = doc.replace(" (you can change the hours in the app › Settings)", "")
     p = plan(doc, target)
     assert apply(doc, p) == target
     assert p and all("23:00 and 08:00" not in find for find, _ in p), p

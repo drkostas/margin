@@ -1,8 +1,8 @@
 """margin's configuration: one TOML file, by default ~/.config/margin/config.toml.
 
     [outline]
-    url = "https://docs.example.ts.net:8453"
-    api_key_command = ["security", "find-generic-password", "-s", "outline-api-claude", "-w"]
+    url = "https://docs.example.com"
+    api_key_command = ["security", "find-generic-password", "-s", "outline-api-key", "-w"]
     pin_ip_command = ["tailscale", "ip", "-4"]      # optional: resolve the url's host to this IP
     admin_key_command = [...]   # optional: an admin's key, used ONLY to create the webhook
     mcp_url = "http://127.0.0.1:3100/mcp"           # optional: Outline's MCP, default <url>/mcp
@@ -25,12 +25,12 @@
                                               # `margin link`; their documents' comments go there
 
     [[repo]]
-    name = "drlab"                            # becomes the Outline collection
-    path = "~/Projects/drlab"
+    name = "my-project"                       # becomes the Outline collection
+    path = "~/code/my-project"
     include = ["**/*.md"]
     exclude = ["**/node_modules/**"]
-    route = "drlab"                           # passed to the notifier as {route}
-    routes = { "docs/chats/vision.md" = "vision" }   # optional: by path prefix, longest wins
+    route = "my-project"                      # passed to the notifier as {route}
+    routes = { "docs/design/" = "design" }    # optional: by path prefix, longest wins
                                               # A document no route names goes to whoever last
                                               # linked it (author_command), else to `route`.
 

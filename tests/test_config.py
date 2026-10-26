@@ -2,9 +2,9 @@ from margin.config import Repo, load
 
 
 def test_route_by_longest_prefix(tmp_path):
-    r = Repo("drlab", tmp_path, route="core",
-             routes={"docs/chats": "chats", "docs/chats/vision.md": "vision"})
-    assert r.route_for("docs/chats/vision.md") == "vision"
+    r = Repo("handbook", tmp_path, route="core",
+             routes={"docs/chats": "chats", "docs/design/cache.md": "design"})
+    assert r.route_for("docs/design/cache.md") == "design"
     assert r.route_for("docs/chats/sessions.md") == "chats"
     assert r.route_for("docs/chatsx.md") == "core"
     assert r.route_for("README.md") == "core"
@@ -40,8 +40,8 @@ def test_notify_substitutes_repo_and_path(tmp_path):
     cfg.notify_cwd = None
     inbox = Inbox.__new__(Inbox)
     inbox.cfg = cfg
-    assert inbox.notify("r", {"text": "hello", "repo": "drlab", "repo_path": "/x/drlab"})
-    assert json.loads(out.read_text()) == ["r", "drlab", "/x/drlab", "hello"]
+    assert inbox.notify("r", {"text": "hello", "repo": "handbook", "repo_path": "/x/handbook"})
+    assert json.loads(out.read_text()) == ["r", "handbook", "/x/handbook", "hello"]
 
 
 def test_repo_of_picks_the_deepest_repo(tmp_path):
@@ -74,7 +74,7 @@ def test_setup_claude_is_idempotent(tmp_path):
 
 
 def test_a_document_no_route_names_goes_to_whoever_linked_it(tmp_path):
-    """2026-10-13: a chat's new spec had no line in `routes`, so the owner's comments on it went to
+    """2026-10-13: a chat's new spec had no line in `routes`, so the user's comments on it went to
     the default route, and another chat had to forward them. `margin link` now records who ran it
     (author_command), and that is where the document's comments go unless `routes` names one."""
     import sys
@@ -86,11 +86,11 @@ def test_a_document_no_route_names_goes_to_whoever_linked_it(tmp_path):
         return Config(url="u", api_key_command=["true"], admin_key_command=None, pin_ip_command=None,
                       listen="", webhook_url="", secret_command=None, poll_seconds=1,
                       quiet_seconds=1, cap_seconds=1, notify_command=None, notify_cwd=None,
-                      mcp_url=None, repos=[Repo("drlab", tmp_path, route="core",
-                                                routes={"docs/chats/vision.md": "vision"})],
+                      mcp_url=None, repos=[Repo("handbook", tmp_path, route="core",
+                                                routes={"docs/design/cache.md": "design"})],
                       state=tmp_path / "s.db", author_command=cmd)
 
-    assert cfg([sys.executable, "-c", "print('sessions-chat')"]).author() == "sessions-chat"
+    assert cfg([sys.executable, "-c", "print('docs-agent')"]).author() == "docs-agent"
     assert cfg([sys.executable, "-c", "import sys; sys.exit(3)"]).author() is None
     assert cfg(None).author() is None and cfg(["/no/such/command"]).author() is None
 
@@ -99,14 +99,14 @@ def test_a_document_no_route_names_goes_to_whoever_linked_it(tmp_path):
             return {"id": "u-agent"}
 
     store = Store(tmp_path / "s.db")
-    store.save_doc("drlab", "docs/specs/new.md", "d-new", "c1", "", "")
-    store.save_doc("drlab", "docs/chats/vision.md", "d-vision", "c1", "", "")
-    store.save_doc("drlab", "docs/old.md", "d-old", "c1", "", "")
-    store.put("author:d-new", "sessions-chat")
-    store.put("author:d-vision", "sessions-chat")
+    store.save_doc("handbook", "docs/specs/new.md", "d-new", "c1", "", "")
+    store.save_doc("handbook", "docs/design/cache.md", "d-design", "c1", "", "")
+    store.save_doc("handbook", "docs/old.md", "d-old", "c1", "", "")
+    store.put("author:d-new", "docs-agent")
+    store.put("author:d-design", "docs-agent")
     inbox = Inbox(cfg(None), FakeOutline(), store)
-    assert inbox.route_of("d-new") == "sessions-chat"      # linked by that chat
-    assert inbox.route_of("d-vision") == "vision"          # a named route still wins
+    assert inbox.route_of("d-new") == "docs-agent"      # linked by that chat
+    assert inbox.route_of("d-design") == "design"          # a named route still wins
     assert inbox.route_of("d-old") == "core"               # nobody recorded: the repo's route
 
 
@@ -136,7 +136,7 @@ def test_a_comment_on_a_picture_names_the_picture(tmp_path):
     cfg = Config(url="u", api_key_command=["true"], admin_key_command=None, pin_ip_command=None,
                  listen="", webhook_url="", secret_command=None, poll_seconds=1, quiet_seconds=1,
                  cap_seconds=1, notify_command=None, notify_cwd=None, mcp_url=None,
-                 repos=[Repo("drlab", tmp_path, route="core")], state=tmp_path / "s.db",
+                 repos=[Repo("handbook", tmp_path, route="core")], state=tmp_path / "s.db",
                  author_command=None)
     inbox = Inbox(cfg, FakeOutline(), Store(tmp_path / "s.db"))
     assert inbox.picture_of("d1", "c-pic") == "the picture Bedroom TV"
