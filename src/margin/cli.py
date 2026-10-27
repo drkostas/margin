@@ -82,6 +82,13 @@ def main(argv: list[str] | None = None) -> int:
                    help="text from a part of their edit the person agreed to undo (repeatable)")
     sub.add_parser("setup-claude")
     sub.add_parser("anchors", help="record where each older comment's passage sits in its document")
+    p = sub.add_parser("pinch-check", help="pinch a fold page on an Android phone over adb and judge each pinch")
+    p.add_argument("page", help="the fold page (margin fold --html)")
+    p.add_argument("--serial", required=True, help="the phone, as adb names it")
+    p.add_argument("--package", default="com.brave.browser", help="the phone's Chromium browser")
+    p.add_argument("--out", help="the folder for the table, the readings and the recording")
+    p.add_argument("--wait-unlock", type=float, default=0.0,
+                   help="seconds to wait for the phone to be awake and unlocked (never unlocked for you)")
     p = sub.add_parser("fold", help="fold a markdown file into five levels of detail, each checked")
     p.add_argument("file")
     p.add_argument("--out", help="write the fold as JSON here")
@@ -89,6 +96,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--model", default="sonnet")
     p.add_argument("--judge-model", default="opus")
     a = ap.parse_args(argv)
+
+    if a.cmd == "pinch-check":
+        from pathlib import Path as P
+        from .pinch_check import run as pinch_run
+        return pinch_run(P(a.page).expanduser().resolve(), a.serial, package=a.package,
+                         out=P(a.out).expanduser() if a.out else None, wait_unlock=a.wait_unlock)
 
     if a.cmd == "fold":
         from functools import partial
