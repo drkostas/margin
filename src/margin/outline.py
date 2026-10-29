@@ -33,6 +33,10 @@ def pin_host(host: str, ip: str) -> None:
     socket.getaddrinfo = gai
 
 
+#: what a proxy answers while Outline itself is down or restarting: worth waiting for, not a fault
+GATEWAY = (502, 503, 504)
+
+
 class Outline:
     def __init__(self, url: str, api_key: str, timeout: float = 30.0):
         self.url = url.rstrip("/")
@@ -59,6 +63,9 @@ class Outline:
                     j = {}
                 if e.code == 429 and attempt < retries:
                     time.sleep(float(e.headers.get("Retry-After") or 2 ** attempt))
+                    continue
+                if e.code in GATEWAY and attempt < retries:
+                    time.sleep(2 ** attempt)
                     continue
                 raise OutlineError(method, e.code, j.get("error", ""), j.get("message", raw[:200]))
             except urllib.error.URLError:
@@ -87,6 +94,23 @@ class Outline:
             if len(page) < limit:
                 return
             offset += limit
+
+    def wait_ready(self, timeout: float = 600.0, every: float = 10.0, log=None) -> dict:
+        """Who the key belongs to, once Outline answers: a server that is down or restarting (a
+        gateway error, or no connection) is waited for until `timeout` seconds, then raised. Any
+        other error (a bad key, say) is raised at once."""
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                return self.me()
+            except (OutlineError, urllib.error.URLError) as e:
+                if isinstance(e, OutlineError) and e.status not in GATEWAY:
+                    raise
+                if time.monotonic() >= deadline:
+                    raise
+                if log:
+                    log(f"waiting for Outline: {e}")
+                time.sleep(every)
 
     # ---- who am I
     def me(self) -> dict:
