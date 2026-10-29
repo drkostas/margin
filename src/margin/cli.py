@@ -155,6 +155,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1 if any(r.action in ("error", "cannot-patch") for _, r in res) else 0
 
     if a.cmd == "serve":
+        # Outline may still be starting (a 502 from its proxy): wait for it instead of exiting
+        o.wait_ready(log=lambda m: print(m, file=sys.stderr, flush=True))
         inbox = Inbox(cfg, o, store)
         try:
             print(ensure_webhook(cfg, o), flush=True)
