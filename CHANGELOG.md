@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.2.1
+
+The first release on PyPI. Version 0.2.0 was never published there, because PyPI does not accept a file name that was used before and deleted.
 
 - A document that nobody but margin has edited and that has no comment is replaced whole when a patch cannot reach the file's text, instead of stopping at `cannot-patch`, and a version that failed before is replaced once as well. A chat's plan was published by the serve pass, the chat went on rewriting it, and the patches from the first rendering to the new text failed on its tables, so the chat's own `margin link` met a document it could not change and had to run `margin accept-file` by hand. Nothing is lost by the replace in that case, which is the rule `accept-file` already applied; a comment or a person's edit keeps the document patch-only.
 - A change to a table is patched as the whole table, with the blank line on each side. Outline took no patch that began inside a table: rows added at its end came back as a paragraph after it, one row lost, and the document stayed at `cannot-patch`. The spaces Outline writes before an inline picture (`[  ![`, three between two pictures) count as its own spelling, like the escapes and line breaks before. The last six documents stuck at `cannot-patch` converged in a replay against Outline.
