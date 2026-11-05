@@ -261,6 +261,48 @@ def test_a_patch_outline_will_not_take_is_not_sent_again_until_the_file_changes(
     assert o.patches > tried, "a new version of the file is tried again"
 
 
+class OutlineKeepsItsOwnRendering(FakeOutline):
+    """Outline answers a patch with the text it was asked for, then keeps a rendering of its own that
+    a later read returns, one that neither loose() nor spelled_alike() forgives."""
+
+    def __init__(self):
+        super().__init__()
+        self.patches = 0
+
+    def patch(self, doc_id: str, find: str, text: str) -> dict:
+        self.patches += 1
+        asked = super().patch(doc_id, find, text)
+        self.docs[doc_id]["text"] = asked["text"].replace("Second", "2nd")
+        return asked
+
+
+def test_a_drift_is_not_patched_again_until_the_file_changes(tmp_path):
+    # a drift kept the file's baseline, so every pass patched the same version again: one README
+    # took about 5,000 updates an hour, each a revision, an event and a webhook delivery
+    root = tmp_path / "repo"
+    root.mkdir()
+    (root / "notes.md").write_text("# Notes\n\nFirst line.\n\nSecond line.\n")
+    o = OutlineKeepsItsOwnRendering()
+    store = Store(tmp_path / "margin.db")
+    s = Syncer(o, store, Repo(name="repo", path=root))
+    s.publish_status(["notes.md"])
+    (root / "notes.md").write_text("# Notes\n\nFirst line, changed.\n\nSecond line.\n")
+    [(_, _, status, _)] = s.publish_status(["notes.md"])
+    assert status == "drift"
+    tried = o.patches
+    assert tried > 0
+    for _ in range(3):
+        [(_, _, status, _)] = s.publish_status(["notes.md"])
+        assert status == "drift"
+    assert o.patches == tried, f"{o.patches - tried} more patches sent for a file that did not change"
+    Syncer(o, store, Repo(name="repo", path=root), full=True).publish_status(["notes.md"])
+    assert o.patches > tried, "--full patches it again"
+    tried = o.patches
+    (root / "notes.md").write_text("# Notes\n\nFirst line, changed again.\n\nSecond line.\n")
+    s.publish_status(["notes.md"])
+    assert o.patches > tried, "a new version of the file is patched again"
+
+
 class OutlineSpellsPatchesItsOwnWay(FakeOutline):
     """Outline as it is: a patch's result spells two literal asterisks `\\*\\*` and ends a line of a
     paragraph with a backslash, where a whole-body save wrote `\\**` and a plain newline."""

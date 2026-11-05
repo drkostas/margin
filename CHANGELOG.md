@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- A version of a file that ends in `drift` is not patched again until the file changes (or `--full`), as a `cannot-patch` one already was. Outline keeps some documents in a rendering of its own after a patch, the file's baseline did not move, and every pass patched the same version again (one README took about 5,000 updates an hour, each a revision, an event and a webhook delivery). It stays reported as `drift`.
+
 ## 0.2.1
 
 The first release on PyPI. Version 0.2.0 was never published there, because PyPI does not accept a file name that was used before and deleted.

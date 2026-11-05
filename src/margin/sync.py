@@ -585,6 +585,14 @@ class Syncer:
                     self.o.replace(row["doc_id"], body)
                     return self._finish(key, row, ident, title, doc["title"], self.canonical(body), REPLACED)
             return Result(key, "cannot-patch", row["detail"] if "detail" in row.keys() else None)
+        if (row["status"] == "drift" and repo_changed and not self.full
+                and self.s.get(f"drift:{row['doc_id']}") == ident):
+            # ⛔ NOR A DRIFT. A document that Outline keeps in a rendering of its own, one that no
+            # comparison here forgives, reads as drift after every patch, and the file's baseline
+            # does not move, so every pass patched it again: one README took about 5,000 updates an
+            # hour, each a revision, an event and a webhook delivery. The patches are sent once for
+            # each version of the file, and again with --full; until then it stays reported as drift.
+            return Result(key, "drift", row["detail"] if "detail" in row.keys() else None)
         dirty_key = f"dirty:{row['doc_id']}"
         if not (repo_changed or self.full or self.s.get(dirty_key) or row["status"] != "ok"):
             return Result(key, "unchanged")       # nothing says either side moved: no API call
@@ -659,6 +667,7 @@ class Syncer:
         else:
             status, detail = ("drift", "after patching, Outline's text differs from the file as "
                                        "Outline renders it")
+            self.s.put(f"drift:{row['doc_id']}", ident)   # this version is not patched again (above)
         # The file's baseline only moves when Outline really matches it, so a failed pass is
         # retried next time instead of being remembered as done.
         self.s.save_doc(self.repo.name, key, row["doc_id"], row["collection_id"],
