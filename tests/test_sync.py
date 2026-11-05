@@ -303,6 +303,31 @@ def test_a_drift_is_not_patched_again_until_the_file_changes(tmp_path):
     assert o.patches > tried, "a new version of the file is patched again"
 
 
+def test_a_file_put_back_to_its_baseline_is_converged_once_and_then_held(tmp_path):
+    # a drift or cannot-patch row keeps the old baseline, so a file put back to it read as unchanged and
+    # was marked ok, while Outline still held the text margin had patched toward the newer version
+    v1 = "# Notes\n\nFirst line.\n\nSecond line.\n"
+    v2 = "# Notes\n\nFirst line, changed.\n\nSecond line.\n"
+    for fake, stuck in ((OutlineKeepsItsOwnRendering, "drift"), (OutlineRefusesPatches, "cannot-patch")):
+        root = tmp_path / fake.__name__
+        root.mkdir()
+        (root / "notes.md").write_text(v1)
+        o = fake()
+        s = Syncer(o, Store(tmp_path / f"{fake.__name__}.db"), Repo(name="repo", path=root))
+        s.publish_status(["notes.md"])
+        (root / "notes.md").write_text(v2)
+        [(_, _, status, _)] = s.publish_status(["notes.md"])
+        assert status == stuck
+        (root / "notes.md").write_text(v1)
+        s.publish_status(["notes.md"])
+        doc = next(d for d in o.docs.values() if d["title"] == "Notes")
+        assert "changed" not in doc["text"], f"{fake.__name__}: Outline still holds the newer version"
+        tried = o.patches
+        for _ in range(3):
+            s.publish_status(["notes.md"])
+        assert o.patches == tried, f"{fake.__name__}: {o.patches - tried} more patches for a file put back"
+
+
 class OutlineSpellsPatchesItsOwnWay(FakeOutline):
     """Outline as it is: a patch's result spells two literal asterisks `\\*\\*` and ends a line of a
     paragraph with a backslash, where a whole-body save wrote `\\**` and a plain newline."""
