@@ -568,7 +568,10 @@ class Syncer:
 
         repo_changed = ident != row["base_repo"]
         failed_key = f"failed:{row['doc_id']}"
-        if (row["status"] == "cannot-patch" and repo_changed and not self.full
+        # ⭐ THE VERSION TRIED DECIDES, NOT WHETHER THE FILE MOVED: a file put back to its baseline while its
+        # document is in cannot-patch or drift is converged back once (below), and that version is then
+        # held to the same rule, or it would be patched on every pass again
+        if (row["status"] == "cannot-patch" and not self.full
                 and self.s.get(failed_key) == ident):
             # ⛔ NOT AGAIN FOR THE SAME FILE (2026-10-14). Every patch is an update to the document
             # (a revision, a webhook delivery), and a version Outline would not take was sent again
@@ -585,7 +588,7 @@ class Syncer:
                     self.o.replace(row["doc_id"], body)
                     return self._finish(key, row, ident, title, doc["title"], self.canonical(body), REPLACED)
             return Result(key, "cannot-patch", row["detail"] if "detail" in row.keys() else None)
-        if (row["status"] == "drift" and repo_changed and not self.full
+        if (row["status"] == "drift" and not self.full
                 and self.s.get(f"drift:{row['doc_id']}") == ident):
             # ⛔ NOR A DRIFT. A document that Outline keeps in a rendering of its own, one that no
             # comparison here forgives, reads as drift after every patch, and the file's baseline
@@ -616,7 +619,11 @@ class Syncer:
             self.s.mark(self.repo.name, key, "outline-edited",
                         "the Outline document was edited; the repo file is unchanged")
             return Result(key, "outline-edited")
-        if not repo_changed:
+        # ⛔ A FILE PUT BACK TO ITS BASELINE IS NOT DONE WHILE MARGIN'S OWN PATCHES MOVED THE DOCUMENT. A pass
+        # that ended in cannot-patch or drift had patched the document toward a newer version, so with the
+        # file back at the baseline the row was marked ok while Outline still held that newer text. Such a
+        # row is converged to the file again, once (the guards above hold the version it was tried at).
+        if not repo_changed and row["status"] not in ("cannot-patch", "drift"):
             if row["status"] != "ok":
                 self.s.mark(self.repo.name, key, "ok")
             return Result(key, "unchanged")
