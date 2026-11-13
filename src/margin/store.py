@@ -168,6 +168,21 @@ class Store:
         row = self.db.execute("SELECT v FROM kv WHERE k=?", (k,)).fetchone()
         return row["v"] if row else default
 
+    def with_prefix(self, prefix: str):
+        """The rows whose key starts with `prefix`, as a range on the key's index. (`LIKE` ignores
+        case, so SQLite cannot use the index for it and reads every row of the table.)"""
+        return self.db.execute("SELECT k, v FROM kv WHERE k >= ? AND k < ? ORDER BY k",
+                               (prefix, prefix[:-1] + chr(ord(prefix[-1]) + 1))).fetchall()
+
+    def trim(self, prefix: str, keep: int) -> int:
+        """Keep the `keep` newest rows whose key starts with `prefix` and delete the rest. A row
+        counts as newer when it was first written later. Returns how many were deleted."""
+        hi = prefix[:-1] + chr(ord(prefix[-1]) + 1)
+        return self.db.execute(
+            "DELETE FROM kv WHERE k >= ? AND k < ? AND rowid NOT IN "
+            "(SELECT rowid FROM kv WHERE k >= ? AND k < ? ORDER BY rowid DESC LIMIT ?)",
+            (prefix, hi, prefix, hi, keep)).rowcount
+
     def put(self, k: str, v: str):
         self.db.execute("INSERT INTO kv(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v",
                         (k, v))

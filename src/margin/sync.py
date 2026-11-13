@@ -179,6 +179,11 @@ def outline_edit(base: str, current: str) -> tuple[list[str], list[str]]:
 REPLACED = "replaced: no person had edited it and it had no comments"
 
 
+#: how many canonical texts are kept. One is stored per version of a file and is read again only
+#: while that version is current, so older ones were only filling the store.
+CANON_KEEP = 300
+
+
 class Syncer:
     def __init__(self, outline: Outline, store: Store, repo: Repo, full: bool = False):
         self.o, self.s, self.repo = outline, store, repo
@@ -229,6 +234,7 @@ class Syncer:
             self.s.put(key, doc["id"])
         text = doc["text"]
         self.s.put(f"canon:{h}", text)
+        self.s.trim("canon:", CANON_KEEP)
         return text
 
     def resolve(self, body: str, base: Path, doc_id: str) -> str:
@@ -362,7 +368,7 @@ class Syncer:
 
     def pins(self) -> dict[str, Path]:
         prefix = self._pin_key("")
-        rows = self.s.db.execute("SELECT k, v FROM kv WHERE k LIKE ?", (prefix + "%",)).fetchall()
+        rows = self.s.with_prefix(prefix)
         return {r["k"][len(prefix):]: Path(r["v"]) for r in rows if r["v"]}
 
     def unpin(self, key: str) -> None:

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- The key-value table is read by its key index and kept small. Finding the pinned files used `LIKE`, which ignores case, so SQLite could not use the index and read every row of the table for each file of a pass (100 reads took 5.4 seconds on a store of 6,000 rows, and 0.015 seconds as a range on the key). The canonical text stored for each version of a file was never deleted, so a long running store held 4,898 of them (455 MB of 562 MB). The newest 300 are kept. A file that is already larger shrinks after a `VACUUM`.
 - A version of a file that ends in `drift` is not patched again until the file changes (or `--full`), as a `cannot-patch` one already was. Outline keeps some documents in a rendering of its own after a patch, the file's baseline did not move, and every pass patched the same version again (one README took about 5,000 updates an hour, each a revision, an event and a webhook delivery). It stays reported as `drift`.
 
 ## 0.2.1
