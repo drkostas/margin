@@ -184,6 +184,11 @@ REPLACED = "replaced: no person had edited it and it had no comments"
 CANON_KEEP = 300
 
 
+#: the most characters Outline takes in one document's text (its own limit, 1,536,000). A file over it
+#: cannot be published at all, so margin says so in plain words instead of sending it to be refused.
+MAX_TEXT = 1_536_000
+
+
 class Syncer:
     def __init__(self, outline: Outline, store: Store, repo: Repo, full: bool = False):
         self.o, self.s, self.repo = outline, store, repo
@@ -297,6 +302,9 @@ class Syncer:
                 if row:
                     out.append((rel, self.o.document(row["doc_id"]), row["status"] or "ok",
                                 row["detail"] or ""))
+                elif self.s.get(f"too-big:{self.repo.name}:{key}") is not None:
+                    out.append((rel, None, "too-big", "the file is over Outline's limit of "
+                                f"{MAX_TEXT:,} characters, so no document was made. Split it into smaller files"))
         return out
 
     def accept_file(self, rel: str, root: Path | None = None) -> Result:
@@ -588,6 +596,13 @@ class Syncer:
         # what margin compares: the file, plus each picture's content (a changed picture is a change)
         ident = text + images.digest(body, base)
         row = self.s.doc(self.repo.name, key)
+        size = len(body)
+        if row is not None and row["text_len"] != size:
+            self.s.set_text_len(self.repo.name, key, size)
+        if size > MAX_TEXT:
+            return self._too_big(key, row, ident, size)
+        if row is None or row["status"] == "too-big":     # under the limit again: published as usual
+            self.s.db.execute("DELETE FROM kv WHERE k=?", (f"too-big:{self.repo.name}:{key}",))
 
         if row is None:
             # a picture is attached to its document, so a document with pictures is made first
@@ -702,6 +717,19 @@ class Syncer:
                 self.s.put(failed_key, ident)          # this version is not sent again (above)
                 return Result(key, "cannot-patch", str(e))
         return self._finish(key, row, ident, title, doc["title"], target, replaced)
+
+    def _too_big(self, key: str, row, ident: str, size: int) -> Result:
+        """A file Outline would refuse for its length. Nothing is sent. The document (if there is one) keeps
+        its older text and the status too-big, and the result says it once for each version of the file,
+        then reads as unchanged, so a long-running sync does not repeat it every pass."""
+        detail = (f"the file is {size:,} characters, over Outline's limit of {MAX_TEXT:,}. Split it into "
+                  "smaller files, each under the limit")
+        said = f"too-big:{self.repo.name}:{key}"
+        first = self.s.get(said) != ident
+        self.s.put(said, ident)
+        if row is not None and (row["status"] != "too-big" or first):
+            self.s.mark(self.repo.name, key, "too-big", detail)
+        return Result(key, "too-big", detail) if first else Result(key, "unchanged")
 
     def _finish(self, key: str, row, ident: str, title: str, doc_title: str, target: str,
                 replaced: str | None) -> Result:
