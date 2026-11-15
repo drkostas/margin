@@ -320,23 +320,15 @@ class Syncer:
             if notes:
                 return Result(key, "refused", f"{len(notes)} comment(s) on the document; answer them "
                                               "first, because the file's text would move their anchors")
-            since = (row["synced_at"] or 0) - 60
-            people = set()
-            for r in self.o.paged("revisions.list", {"documentId": row["doc_id"]}):
-                who = r.get("createdBy") or {}
-                if who.get("id") != me and _epoch(r.get("createdAt")) > since:
-                    people.add(who.get("name") or who.get("id") or "someone")
             doc = self.o.document(row["doc_id"])
-            last = doc.get("updatedBy") or {}
-            if last.get("id") not in (None, me):
-                people.add(last.get("name") or "someone")
+            people = self.people_since(row, doc, me)
             if people:
                 return Result(key, "refused", f"edited in Outline by {', '.join(sorted(people))} "
                                               "since the last sync; ask them which text is right")
             # Outline's text becomes the base, and the file's baseline is cleared so the next step
             # patches the file in even when only Outline had moved (outline-edited)
             self.s.save_doc(self.repo.name, key, row["doc_id"], row["collection_id"],
-                            "", doc["text"], "ok", None)
+                            "", doc["text"], "ok", None, updated_at=doc.get("updatedAt"))
             src = dict(tree(files(self.repo))).get(key)
             r = self.one(key, src)
             if r.action not in ("cannot-patch", "drift"):
@@ -348,10 +340,11 @@ class Syncer:
             text = file.read_text(errors="replace")
             title, body = split_title(text, PurePosixPath(key).name)
             ident = text + images.digest(body, file.parent)
-            after = self.o.replace(row["doc_id"], self.resolve(body, file.parent, row["doc_id"]))["text"]
+            after = self.o.replace(row["doc_id"], self.resolve(body, file.parent, row["doc_id"]))
             self.s.save_doc(self.repo.name, key, row["doc_id"], row["collection_id"],
-                            ident, after, "ok",
-                            "the file replaced the document (no person had edited it, no comments)")
+                            ident, after["text"], "ok",
+                            "the file replaced the document (no person had edited it, no comments)",
+                            updated_at=after.get("updatedAt"))
             return Result(key, "patched", "replaced: no person had edited it and it had no comments")
 
     # ---- files linked from a worktree
@@ -395,7 +388,8 @@ class Syncer:
             src = self.source(key, dict(tree(files(self.repo))).get(key))
             if src is None:
                 return Result(key, "refused", "the file is gone")
-            current = self.o.document(row["doc_id"])["text"]
+            now = self.o.document(row["doc_id"])
+            current = now["text"]
             if current == row["base_outline"]:
                 return Result(key, "refused", "nobody edited the document in Outline since the "
                                               "last sync; margin link publishes the file")
@@ -424,7 +418,7 @@ class Syncer:
             # Outline's text is the base now, and the file's baseline is cleared so the next step
             # patches the file in even when the file had not moved since the last sync
             self.s.save_doc(self.repo.name, key, row["doc_id"], row["collection_id"],
-                            "", current, "ok", None)
+                            "", current, "ok", None, updated_at=now.get("updatedAt"))
             return self.one(key, src)
 
     def source(self, key: str, src: str | None) -> str | None:
@@ -514,6 +508,40 @@ class Syncer:
         if not spelled_alike(current, target) and loose(current) != loose(target):
             raise CannotPatch("Outline's text still differs from the file after widening")
 
+    def people_since(self, row, doc: dict, me: str | None = None) -> set[str]:
+        """Who other than margin's own account has written the document since margin last did. When
+        margin recorded the document's updatedAt at that write and it has not moved, nobody has, and
+        Outline is not asked again. Otherwise the last editor and every revision saved since the write
+        are read."""
+        seen = row["outline_updated_at"]
+        if seen and doc.get("updatedAt") == seen:
+            return set()
+        me = me or self.o.me()["id"]
+        since = (row["synced_at"] or 0) - 60
+        people = set()
+        for r in self.o.paged("revisions.list", {"documentId": row["doc_id"]}):
+            who = r.get("createdBy") or {}
+            if who.get("id") != me and _epoch(r.get("createdAt")) > since:
+                people.add(who.get("name") or who.get("id") or "someone")
+        last = doc.get("updatedBy") or {}
+        if last.get("id") not in (None, me):
+            people.add(last.get("name") or "someone")
+        return people
+
+    def edited_since(self, row, doc: dict) -> bool:
+        """Whether a person has edited the document in Outline since margin last wrote it, read when
+        margin is about to write it again. A document whose updatedAt is the one margin recorded has
+        had no write since, so a text that differs is Outline's own rendering. A moved updatedAt is a
+        person's edit when the last editor or a revision since margin's write is someone else. A
+        document synced before margin recorded the time keeps the older rule (only_margin_edited).
+        An answer Outline withholds counts as an edit, so a person's text is never written over."""
+        if not row["outline_updated_at"]:
+            return not self.only_margin_edited(doc)
+        try:
+            return bool(self.people_since(row, doc))
+        except OutlineError:
+            return True
+
     def only_margin_edited(self, doc: dict) -> bool:
         """Whether nobody but margin's own account has edited this document: its last editor is
         margin and every saved revision was made by margin. Then a difference from the baseline
@@ -569,7 +597,8 @@ class Syncer:
                                          self._parent_id(key))
             if pics:
                 doc = self.o.replace(doc["id"], self.resolve(body, base, doc["id"]))
-            self.s.save_doc(self.repo.name, key, doc["id"], self.collection, ident, doc["text"])
+            self.s.save_doc(self.repo.name, key, doc["id"], self.collection, ident, doc["text"],
+                            updated_at=doc.get("updatedAt"))
             return Result(key, "created")
 
         repo_changed = ident != row["base_repo"]
@@ -602,10 +631,10 @@ class Syncer:
             # hour, each a revision, an event and a webhook delivery. The patches are sent once for
             # each version of the file, and again with --full; until then it stays reported as drift.
             return Result(key, "drift", row["detail"] if "detail" in row.keys() else None)
-        dirty_key = f"dirty:{row['doc_id']}"
-        if not (repo_changed or self.full or self.s.get(dirty_key) or row["status"] != "ok"):
-            return Result(key, "unchanged")       # nothing says either side moved: no API call
-        self.s.db.execute("DELETE FROM kv WHERE k=?", (dirty_key,))
+        if not (repo_changed or self.full or row["status"] != "ok"):
+            # no API call. An edit made in Outline meanwhile is found when the file next changes
+            # (edited_since below), and it stays in Outline until then, because nothing is written.
+            return Result(key, "unchanged")
         try:
             doc = self.o.document(row["doc_id"])
         except OutlineError as e:
@@ -615,7 +644,7 @@ class Syncer:
                 return Result(key, "deleted-in-outline")
             raise
         current = doc["text"]
-        outline_changed = current != row["base_outline"] and not self.only_margin_edited(doc)
+        outline_changed = current != row["base_outline"] and self.edited_since(row, doc)
 
         if outline_changed and repo_changed:
             self.s.mark(self.repo.name, key, "conflict",
@@ -657,9 +686,10 @@ class Syncer:
                 # ⛔ the patches that did apply changed Outline's text: keep that text as the baseline,
                 # or the next pass reads margin's own edits as someone else's and calls it a conflict
                 # (2026-10-13, a long plan with tables). The file's baseline stays, so it is retried.
-                now = self.o.document(row["doc_id"])["text"]
+                now = self.o.document(row["doc_id"])
                 self.s.save_doc(self.repo.name, key, row["doc_id"], row["collection_id"],
-                                row["base_repo"], now, "cannot-patch", str(e))
+                                row["base_repo"], now["text"], "cannot-patch", str(e),
+                                updated_at=now.get("updatedAt"))
                 self.s.put(failed_key, ident)          # this version is not sent again (above)
                 return Result(key, "cannot-patch", str(e))
         return self._finish(key, row, ident, title, doc["title"], target, replaced)
@@ -670,7 +700,8 @@ class Syncer:
         file's, and the baselines moved only when they match."""
         if title != doc_title:
             self.o.set_title(row["doc_id"], title)
-        after = self.o.document(row["doc_id"])["text"]
+        after_doc = self.o.document(row["doc_id"])
+        after = after_doc["text"]
         if after == target:
             status, detail = "ok", replaced
         elif loose(after) == loose(target):
@@ -684,5 +715,6 @@ class Syncer:
         # The file's baseline only moves when Outline really matches it, so a failed pass is
         # retried next time instead of being remembered as done.
         self.s.save_doc(self.repo.name, key, row["doc_id"], row["collection_id"],
-                        ident if status == "ok" else row["base_repo"], after, status, detail)
+                        ident if status == "ok" else row["base_repo"], after, status, detail,
+                        updated_at=after_doc.get("updatedAt"))
         return Result(key, "patched" if status == "ok" else "drift", detail or "")

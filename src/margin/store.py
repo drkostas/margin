@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS doc (
   base_outline TEXT,                               -- Outline's text right after the last sync
   status TEXT NOT NULL DEFAULT 'ok',               -- ok | conflict | cannot-patch | missing-file
   detail TEXT, synced_at REAL,
+  outline_updated_at TEXT,                         -- the document's updatedAt right after margin wrote it
   PRIMARY KEY (repo, path)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS doc_by_id ON doc(doc_id);
@@ -92,6 +93,10 @@ class Store:
                           ("anchor_lost", "INTEGER NOT NULL DEFAULT 0")):
             if col not in cols:
                 self.db.execute(f"ALTER TABLE comment ADD COLUMN {col} {kind}")
+        if "outline_updated_at" not in {r["name"] for r in self.db.execute("PRAGMA table_info(doc)").fetchall()}:
+            self.db.execute("ALTER TABLE doc ADD COLUMN outline_updated_at TEXT")
+        # margin no longer subscribes to documents.update, so the marks that event left are read by nothing
+        self.db.execute("DELETE FROM kv WHERE k >= 'dirty:' AND k < 'dirty;'")
 
     # ---- docs
     def doc(self, repo: str, path: str):
@@ -106,14 +111,18 @@ class Store:
         return self.db.execute("SELECT * FROM doc ORDER BY repo, path").fetchall()
 
     def save_doc(self, repo, path, doc_id, collection_id, base_repo, base_outline,
-                 status="ok", detail=None):
+                 status="ok", detail=None, updated_at=None):
+        """The baselines after a sync. `updated_at` is the document's updatedAt as Outline gave it
+        right after margin's own write, so a later write by anyone shows as a different value."""
         self.db.execute(
             "INSERT INTO doc(repo,path,doc_id,collection_id,base_repo,base_outline,status,detail,"
-            "synced_at) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(repo,path) DO UPDATE SET "
+            "synced_at,outline_updated_at) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(repo,path) DO UPDATE SET "
             "doc_id=excluded.doc_id, collection_id=excluded.collection_id, "
             "base_repo=excluded.base_repo, base_outline=excluded.base_outline, "
-            "status=excluded.status, detail=excluded.detail, synced_at=excluded.synced_at",
-            (repo, path, doc_id, collection_id, base_repo, base_outline, status, detail, time.time()))
+            "status=excluded.status, detail=excluded.detail, synced_at=excluded.synced_at, "
+            "outline_updated_at=excluded.outline_updated_at",
+            (repo, path, doc_id, collection_id, base_repo, base_outline, status, detail, time.time(),
+             updated_at))
 
     def mark(self, repo, path, status, detail=None):
         self.db.execute("UPDATE doc SET status=?, detail=? WHERE repo=? AND path=?",
