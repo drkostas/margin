@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS doc (
   status TEXT NOT NULL DEFAULT 'ok',               -- ok | conflict | cannot-patch | missing-file
   detail TEXT, synced_at REAL,
   outline_updated_at TEXT,                         -- the document's updatedAt right after margin wrote it
+  text_len INTEGER,                                -- characters margin would publish, as of its last pass
   PRIMARY KEY (repo, path)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS doc_by_id ON doc(doc_id);
@@ -93,8 +94,10 @@ class Store:
                           ("anchor_lost", "INTEGER NOT NULL DEFAULT 0")):
             if col not in cols:
                 self.db.execute(f"ALTER TABLE comment ADD COLUMN {col} {kind}")
-        if "outline_updated_at" not in {r["name"] for r in self.db.execute("PRAGMA table_info(doc)").fetchall()}:
-            self.db.execute("ALTER TABLE doc ADD COLUMN outline_updated_at TEXT")
+        doc_cols = {r["name"] for r in self.db.execute("PRAGMA table_info(doc)").fetchall()}
+        for col, kind in (("outline_updated_at", "TEXT"), ("text_len", "INTEGER")):
+            if col not in doc_cols:
+                self.db.execute(f"ALTER TABLE doc ADD COLUMN {col} {kind}")
         # margin no longer subscribes to documents.update, so the marks that event left are read by nothing
         self.db.execute("DELETE FROM kv WHERE k >= 'dirty:' AND k < 'dirty;'")
 
@@ -123,6 +126,10 @@ class Store:
             "outline_updated_at=excluded.outline_updated_at",
             (repo, path, doc_id, collection_id, base_repo, base_outline, status, detail, time.time(),
              updated_at))
+
+    def set_text_len(self, repo, path, n):
+        """How many characters margin would publish for this file, so a reader can see one near the limit."""
+        self.db.execute("UPDATE doc SET text_len=? WHERE repo=? AND path=?", (n, repo, path))
 
     def seen_updated_at(self, repo, path, updated_at):
         """The document's updatedAt as margin last checked it, when a check found nothing to do."""
