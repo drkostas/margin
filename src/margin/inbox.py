@@ -216,6 +216,35 @@ class Inbox:
                 newest = time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime())
             if newest:
                 self.s.put(key, newest)
+            self.moved(repo.name, cid)
+        return n
+
+    def moved(self, repo: str, collection_id: str) -> int:
+        """Flag each synced document of the collection whose updatedAt is not the one margin recorded at its
+        own last write, so the next sync pass looks at it (Syncer.one). That is how an edit made in Outline to
+        a file that has not changed is found, now that margin does not subscribe to documents.update. The
+        documents come newest first, and reading stops at the newest one the previous poll saw. The first
+        poll of a collection only learns where it is."""
+        key = f"docs-poll:{repo}"
+        mark = self.s.get(key)
+        newest, n = mark, 0
+        try:
+            for d in self.o.documents(collection_id):
+                at = d.get("updatedAt") or ""
+                if mark and at <= mark:
+                    break
+                newest = max(newest or "", at)
+                if mark is None:
+                    break                 # the first page tells where the collection is
+                row = self.s.doc_by_id(d["id"])
+                if row is not None and row["status"] == "ok" and at != row["outline_updated_at"]:
+                    self.s.put(f"moved:{d['id']}", at)
+                    n += 1
+        except OutlineError as e:
+            print(f"margin: documents of {repo} not read: {e}", file=sys.stderr, flush=True)
+            return n
+        if newest:
+            self.s.put(key, newest)
         return n
 
     # ---- delivery

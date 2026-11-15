@@ -195,6 +195,12 @@ class Outline:
             raise OutlineError("upload", e.code, "", e.read().decode(errors="replace")[:200])
         return d["attachment"]["url"]
 
+    def documents(self, collection_id: str, limit: int = 5):
+        """The collection's documents, the most recently updated first. Each comes with its text, so the
+        pages are small and a caller stops reading once it reaches what it saw before."""
+        return self.paged("documents.list", {"collectionId": collection_id, "sort": "updatedAt",
+                                             "direction": "DESC"}, limit=limit)
+
     # ---- comments
     def comments(self, collection_id: str | None = None, document_id: str | None = None):
         body: dict = {"includeAnchorText": True, "sort": "createdAt", "direction": "DESC"}

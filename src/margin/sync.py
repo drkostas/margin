@@ -631,10 +631,14 @@ class Syncer:
             # hour, each a revision, an event and a webhook delivery. The patches are sent once for
             # each version of the file, and again with --full; until then it stays reported as drift.
             return Result(key, "drift", row["detail"] if "detail" in row.keys() else None)
-        if not (repo_changed or self.full or row["status"] != "ok"):
-            # no API call. An edit made in Outline meanwhile is found when the file next changes
-            # (edited_since below), and it stays in Outline until then, because nothing is written.
+        moved_key = f"moved:{row['doc_id']}"
+        moved = self.s.get(moved_key)
+        if not (repo_changed or self.full or moved or row["status"] != "ok"):
+            # no API call. An edit made in Outline is flagged by the catch-up poll (Inbox.moved), and
+            # otherwise found when the file next changes (edited_since below).
             return Result(key, "unchanged")
+        if moved:
+            self.s.db.execute("DELETE FROM kv WHERE k=?", (moved_key,))
         try:
             doc = self.o.document(row["doc_id"])
         except OutlineError as e:
@@ -661,6 +665,10 @@ class Syncer:
         if not repo_changed and row["status"] not in ("cannot-patch", "drift"):
             if row["status"] != "ok":
                 self.s.mark(self.repo.name, key, "ok")
+            if doc.get("updatedAt") and doc["updatedAt"] != row["outline_updated_at"]:
+                # nobody edited it (margin's own write it did not record, or no change to the text), so the
+                # poll need not flag it again
+                self.s.seen_updated_at(self.repo.name, key, doc["updatedAt"])
             return Result(key, "unchanged")
 
         body = self.resolve(body, base, row["doc_id"])
