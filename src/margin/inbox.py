@@ -25,7 +25,11 @@ from .config import Config
 from .outline import Outline, OutlineError, comment_text, doc_url, mentions
 from .store import Store
 
-EVENTS = ["comments.create", "comments.update", "documents.update"]
+# ⛔ NOT documents.update. Outline keeps a row for every delivery for about a week, and every patch margin
+# sends is a documents.update of its own, so publishing a long document often made thousands of rows a
+# day, most of them about margin's own writes. An edit made in Outline is found when margin next
+# publishes the document instead, from its updatedAt and editors (sync.Syncer.edited_since).
+EVENTS = ["comments.create", "comments.update"]
 #: how many characters before a passage are kept to find it again
 BEFORE = 40
 
@@ -170,10 +174,6 @@ class Inbox:
     def on_webhook(self, event: dict) -> str:
         kind = event.get("event")
         payload = event.get("payload") or {}
-        if kind == "documents.update":
-            if payload.get("id"):
-                self.s.put(f"dirty:{payload['id']}", "1")
-            return "noted"
         if kind not in ("comments.create", "comments.update"):
             return "ignored"
         model = payload.get("model")
