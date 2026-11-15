@@ -242,6 +242,8 @@ def main(argv: list[str] | None = None) -> int:
                     # nor forces its file over one a person did make (2026-10-16)
                     why = (" Nobody edited it: Outline cannot hold a text that long, so margin sent nothing."
                            if status == "too-big" else
+                           " Outline refused the change, so it still has the older text. The other files are published as usual."
+                           if status == "error" else
                            " Nobody edited it: margin could not patch it into the file's text. "
                            "`margin accept-file` publishes the file when only margin has edited it."
                            if status in ("cannot-patch", "drift") else
@@ -254,6 +256,9 @@ def main(argv: list[str] | None = None) -> int:
                     bad = 1
                 elif status == "too-big":
                     print(f"not published: {name}/{rel} is too-big ({detail}).", file=sys.stderr)
+                    bad = 1
+                elif status == "error":
+                    print(f"not published: {name}/{rel}, Outline refused it ({detail}).", file=sys.stderr)
                     bad = 1
                 else:
                     print(f"not published: {name}/{rel} is excluded by the repo's include or "
