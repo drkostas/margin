@@ -124,6 +124,10 @@ class Store:
             (repo, path, doc_id, collection_id, base_repo, base_outline, status, detail, time.time(),
              updated_at))
 
+    def seen_updated_at(self, repo, path, updated_at):
+        """The document's updatedAt as margin last checked it, when a check found nothing to do."""
+        self.db.execute("UPDATE doc SET outline_updated_at=? WHERE repo=? AND path=?", (updated_at, repo, path))
+
     def mark(self, repo, path, status, detail=None):
         self.db.execute("UPDATE doc SET status=?, detail=? WHERE repo=? AND path=?",
                         (status, detail, repo, path))

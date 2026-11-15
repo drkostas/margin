@@ -13,6 +13,7 @@ import pytest
 
 from margin.config import Config, Repo
 from margin.inbox import EVENTS, Inbox
+from margin.outline import OutlineError
 from margin.store import Store
 from margin.sync import Syncer
 
@@ -53,7 +54,8 @@ class FakeOutline:
 
     def create_document(self, collection_id, title, text, parent_id=None):
         doc_id = f"d{len(self.docs) + 1}"
-        self.docs[doc_id] = {"id": doc_id, "title": title, "text": text, "url": f"/doc/{doc_id}"}
+        self.docs[doc_id] = {"id": doc_id, "title": title, "text": text, "url": f"/doc/{doc_id}",
+                             "collectionId": collection_id}
         self._stamp(doc_id, ME)
         return dict(self.docs[doc_id])
 
@@ -84,6 +86,13 @@ class FakeOutline:
 
     def comments(self, collection_id=None, document_id=None):
         return []
+
+    def documents(self, collection_id, limit=5):
+        self.calls.append("documents.list")
+        rows = [d for d in self.docs.values() if d.get("collectionId") == collection_id]
+        for d in sorted(rows, key=lambda d: d["updatedAt"], reverse=True):
+            self.calls.append(f"listed {d['id']}")
+            yield dict(d)
 
     def paged(self, method, body=None, limit=100):
         assert method == "revisions.list"
@@ -236,3 +245,82 @@ def test_accept_file_takes_a_conflict_nobody_wrote_since_without_reading_revisio
     assert r.action == "patched", r
     assert "A line in the file." in o.docs[doc_id]["text"]
     assert "revisions.list" not in o.calls
+
+
+# ---- the catch-up poll finds an edit made in Outline to a file that has not changed
+def poller(tmp_path: Path, o: FakeOutline, s: Syncer) -> Inbox:
+    cfg = Config(url="https://outline.example.org", api_key_command=["true"], admin_key_command=None,
+                 pin_ip_command=None, listen="127.0.0.1:0", webhook_url="", secret_command=None,
+                 poll_seconds=60, quiet_seconds=1, cap_seconds=1, notify_command=None, notify_cwd=None,
+                 mcp_url=None, author_command=None, repos=[s.repo], state=s.s.path)
+    return Inbox(cfg, o, s.s)
+
+
+def test_the_poll_finds_an_outline_edit_on_an_unchanged_file(tmp_path):
+    root, o, s, doc_id = world(tmp_path)
+    inbox = poller(tmp_path, o, s)
+    inbox.poll()                                                   # the first poll learns where it is
+    o.edit_as(doc_id, ALEX, o.docs[doc_id]["text"] + "\n\nA line typed in Outline.")
+    inbox.poll()
+    assert s.s.get(f"moved:{doc_id}") == o.docs[doc_id]["updatedAt"]
+    r = s.one("notes.md", "notes.md")
+    assert r.action == "outline-edited"
+    assert "A line typed in Outline." in o.docs[doc_id]["text"]
+    assert s.s.get(f"moved:{doc_id}") is None
+
+
+def test_the_first_poll_flags_nothing(tmp_path):
+    root, o, s, doc_id = world(tmp_path)
+    o.edit_as(doc_id, ALEX, o.docs[doc_id]["text"] + "\n\nA line typed in Outline.")
+    poller(tmp_path, o, s).poll()
+    assert s.s.with_prefix("moved:") == [] and s.s.get("docs-poll:repo") == o.docs[doc_id]["updatedAt"]
+
+
+def test_margins_own_writes_are_not_flagged(tmp_path):
+    root, o, s, doc_id = world(tmp_path)
+    inbox = poller(tmp_path, o, s)
+    inbox.poll()
+    change_file(root)
+    s.publish_status(["notes.md"])                                 # margin writes and records the time
+    inbox.poll()
+    assert s.s.with_prefix("moved:") == []
+
+
+def test_a_flagged_write_by_margin_is_recorded_so_it_is_checked_once(tmp_path):
+    root, o, s, doc_id = world(tmp_path)
+    inbox = poller(tmp_path, o, s)
+    inbox.poll()
+    o.edit_as(doc_id, ME, o.docs[doc_id]["text"] + "\n\nAn older pass margin stopped part way.")
+    inbox.poll()
+    assert s.one("notes.md", "notes.md").action == "unchanged"
+    assert s.s.doc("repo", "notes.md")["outline_updated_at"] == o.docs[doc_id]["updatedAt"]
+    o.calls.clear()
+    assert s.one("notes.md", "notes.md").action == "unchanged" and o.calls == []
+
+
+def test_the_poll_reads_no_further_than_what_it_saw(tmp_path):
+    root, o, s, doc_id = world(tmp_path)
+    inbox = poller(tmp_path, o, s)
+    inbox.poll()
+    o.calls.clear()
+    inbox.poll()                                                    # nothing moved since
+    assert [c for c in o.calls if c.startswith("listed")] == [f"listed {doc_id}"]
+
+
+def test_a_flag_stays_when_the_document_cannot_be_read(tmp_path):
+    root, o, s, doc_id = world(tmp_path)
+    inbox = poller(tmp_path, o, s)
+    inbox.poll()
+    o.edit_as(doc_id, ALEX, o.docs[doc_id]["text"] + "\n\nA line typed in Outline.")
+    inbox.poll()
+    read = o.document
+
+    def down(d):
+        raise OutlineError("documents.info", 500, "internal_error", "Outline failed to answer")
+    o.document = down
+    with pytest.raises(OutlineError):
+        s.one("notes.md", "notes.md")
+    assert s.s.get(f"moved:{doc_id}") is not None                 # kept for the next pass
+    o.document = read
+    assert s.one("notes.md", "notes.md").action == "outline-edited"
+    assert s.s.get(f"moved:{doc_id}") is None
