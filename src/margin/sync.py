@@ -189,6 +189,21 @@ CANON_KEEP = 300
 MAX_TEXT = 1_536_000
 
 
+def under_limit(hunks: list[tuple[str, str]], size: int, limit: int | None = None) -> list[tuple[str, str]]:
+    """The hunks in an order that never takes the text past Outline's limit on the way. Outline refuses a patch whose
+    result is over the limit, so a document near it that must lose a large part and gain a smaller one fails when the
+    gain comes first, though the end result fits. When the planned order would pass the limit, the hunks that shrink
+    the text go first, each group in its planned order; otherwise the planned order stands."""
+    limit = MAX_TEXT if limit is None else limit
+    running = size
+    for find, repl in hunks:
+        running += len(repl) - len(find)
+        if running > limit:
+            return ([h for h in hunks if len(h[1]) < len(h[0])] +
+                    [h for h in hunks if len(h[1]) >= len(h[0])])
+    return hunks
+
+
 class Syncer:
     def __init__(self, outline: Outline, store: Store, repo: Repo, full: bool = False):
         self.o, self.s, self.repo = outline, store, repo
@@ -287,25 +302,36 @@ class Syncer:
                 wanted.update("/".join(parts[:d]) for d in range(1, len(parts)))
                 parent, name = rel.rpartition("/")[0], rel.rpartition("/")[2]
                 wanted.add(parent if parent and name.lower() == "readme.md" else rel)
-            done = set()
+            done, errors = set(), {}
             for key, src in tree(files(self.repo)):
                 if key in wanted:
-                    self.one(key, src)
+                    errors.update(self._one_or_error(key, src))
                     done.add(key)
             for key in sorted((wanted - done) & set(self.pins())):   # only in a worktree so far
                 if self.source(key, None) is not None:
-                    self.one(key, None)
+                    errors.update(self._one_or_error(key, None))
             for rel in rels:
                 parent, name = rel.rpartition("/")[0], rel.rpartition("/")[2]
                 key = parent if parent and name.lower() == "readme.md" else rel
                 row = self.s.doc(self.repo.name, key)
-                if row:
+                if key in errors:
+                    out.append((rel, self.o.document(row["doc_id"]) if row else None, "error", errors[key]))
+                elif row:
                     out.append((rel, self.o.document(row["doc_id"]), row["status"] or "ok",
                                 row["detail"] or ""))
                 elif self.s.get(f"too-big:{self.repo.name}:{key}") is not None:
                     out.append((rel, None, "too-big", "the file is over Outline's limit of "
                                 f"{MAX_TEXT:,} characters, so no document was made. Split it into smaller files"))
         return out
+
+    def _one_or_error(self, key: str, src) -> dict[str, str]:
+        """Publish one document; {key: what Outline said} when Outline refuses it, so the files linked with it still
+        publish and get their links, as a pass already does."""
+        try:
+            self.one(key, src)
+        except OutlineError as e:
+            return {key: str(e)}
+        return {}
 
     def accept_file(self, rel: str, root: Path | None = None) -> Result:
         """Let the file's side win a conflict that no person made: the document's text since the
@@ -495,7 +521,8 @@ class Syncer:
         # cannot-patch, retried on every pass. Lines spelled alike keep Outline's own spelling
         # (patches.adopt), and a result spelled alike counts as the one expected.
         while budget > 0 and not spelled_alike(current, target):
-            hunks = [h for h in plan(current, adopt(current, target), widen) if h not in failed]
+            hunks = under_limit([h for h in plan(current, adopt(current, target), widen) if h not in failed],
+                                len(current))
             if not hunks:
                 if widen + 1 >= tries:
                     break
