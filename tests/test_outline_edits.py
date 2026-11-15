@@ -13,6 +13,7 @@ import pytest
 
 from margin.config import Config, Repo
 from margin.inbox import EVENTS, Inbox
+from margin.outline import OutlineError
 from margin.store import Store
 from margin.sync import Syncer
 
@@ -304,3 +305,22 @@ def test_the_poll_reads_no_further_than_what_it_saw(tmp_path):
     o.calls.clear()
     inbox.poll()                                                    # nothing moved since
     assert [c for c in o.calls if c.startswith("listed")] == [f"listed {doc_id}"]
+
+
+def test_a_flag_stays_when_the_document_cannot_be_read(tmp_path):
+    root, o, s, doc_id = world(tmp_path)
+    inbox = poller(tmp_path, o, s)
+    inbox.poll()
+    o.edit_as(doc_id, ALEX, o.docs[doc_id]["text"] + "\n\nA line typed in Outline.")
+    inbox.poll()
+    read = o.document
+
+    def down(d):
+        raise OutlineError("documents.info", 500, "internal_error", "Outline failed to answer")
+    o.document = down
+    with pytest.raises(OutlineError):
+        s.one("notes.md", "notes.md")
+    assert s.s.get(f"moved:{doc_id}") is not None                 # kept for the next pass
+    o.document = read
+    assert s.one("notes.md", "notes.md").action == "outline-edited"
+    assert s.s.get(f"moved:{doc_id}") is None

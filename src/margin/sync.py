@@ -637,16 +637,17 @@ class Syncer:
             # no API call. An edit made in Outline is flagged by the catch-up poll (Inbox.moved), and
             # otherwise found when the file next changes (edited_since below).
             return Result(key, "unchanged")
-        if moved:
-            self.s.db.execute("DELETE FROM kv WHERE k=?", (moved_key,))
         try:
             doc = self.o.document(row["doc_id"])
         except OutlineError as e:
             if e.status == 404:
+                self.s.db.execute("DELETE FROM kv WHERE k=?", (moved_key,))
                 self.s.mark(self.repo.name, key, "deleted-in-outline",
                             "the document was deleted in Outline; margin will not recreate it")
                 return Result(key, "deleted-in-outline")
-            raise
+            raise                       # the flag stays, so the next pass reads the document again
+        if moved:
+            self.s.db.execute("DELETE FROM kv WHERE k=?", (moved_key,))
         current = doc["text"]
         outline_changed = current != row["base_outline"] and self.edited_since(row, doc)
 
