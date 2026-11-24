@@ -153,11 +153,66 @@ QUIET = 60.0
 QUIET_AFTER_LOSS = 300.0
 
 
+#: how often the wait looks at the phone again. SHORTER THAN QUIET on purpose, since a look every 30 s
+#: against a 60 s quiet window can miss the window by half a minute
+POLL = 5.0
+#: and how often the waiting line is said, so a reader sees the idle approaching without a flood
+SAY_EVERY = 30.0
+
+
+def why_not_ready(power: str, locked: bool, idle: float | None, quiet: float = QUIET) -> str | None:
+    """Pure. Why the phone cannot take the test now, in words, or None when it can.
+
+    ⛔ IT NAMES THE CONDITION THAT FAILED, WITH ITS READING. The refusal used to say "the phone is
+    locked, asleep or off adb" whatever had failed. Twice inside one ten-minute window it said that
+    while the phone was awake and unlocked and the real failure was the quiet window, which lost the
+    window and took a reading of this module's own code to explain.
+    """
+    if "mWakefulness=Awake" not in (power or ""):
+        return "the phone is asleep or off adb, since dumpsys power says no mWakefulness=Awake"
+    if locked:
+        return "the phone is awake but its lock screen is up, and the test never unlocks it"
+    if idle is None:
+        return ("the phone is awake and unlocked, but its last input cannot be read, since dumpsys power "
+                "gave no mLastUserActivityTime beside a line saying how long ago it was")
+    if idle < quiet:
+        return (f"the phone is awake and unlocked, but it was last touched {idle:.1f} s ago and the test "
+                f"waits for {quiet:g} s of quiet, so it does not take the screen from a person using it")
+    return None
+
+
 def ready(power: str, locked: bool, idle: float | None, quiet: float = QUIET) -> bool:
     """Pure. Whether the phone can take the test now: awake, past its lock screen, and untouched for
     `quiet` seconds (`idle`, from claude_human.android.idle_s), so the browser does not take the
-    screen from a person who is using the phone."""
-    return "mWakefulness=Awake" in (power or "") and not locked and idle is not None and idle >= quiet
+    screen from a person who is using the phone. why_not_ready says which part failed."""
+    return why_not_ready(power, locked, idle, quiet) is None
+
+
+def _say(text: str) -> None:
+    print(text, flush=True)
+
+
+def wait_ready(look, *, quiet: float = QUIET, budget: float = 0.0, poll: float = POLL,
+               say=_say, sleep=time.sleep, clock=time.monotonic) -> str | None:
+    """Look at the phone until it can take the test, for at most `budget` seconds. None when it is
+    ready, else why the LAST look said no, which is what a refusal should carry.
+
+    `look` returns (power, locked, idle) for one reading. The first look happens before any wait, so a
+    budget of 0 is one look. The waiting line is said at once and then every SAY_EVERY seconds, with
+    the reading in it, so a reader watches the idle approach instead of one fixed sentence.
+    """
+    end = clock() + budget
+    said_at: float | None = None
+    while True:
+        why = why_not_ready(*look(), quiet)
+        if why is None:
+            return None
+        if clock() >= end:
+            return why
+        if said_at is None or clock() - said_at >= SAY_EVERY:
+            say(f"{time.strftime('%H:%M')} waiting for the phone, {why}")
+            said_at = clock()
+        sleep(poll)
 
 
 class Page:
@@ -214,22 +269,15 @@ def run(page: Path, serial: str, *, package: str = "com.brave.browser", out: Pat
     out = Path(out or Path("/tmp/margin-pinch-check"))
     out.mkdir(parents=True, exist_ok=True)
     run_adb = android._runner(adb, None)
-    end = clock() + wait_unlock
+    started = clock()
 
-    def wait_ready(quiet: float = QUIET) -> bool:
-        said = False
-        while True:
-            power = android._read(serial, run_adb, WAKEFULNESS) or ""
-            if ready(power, android.locked(serial, run_adb), android.idle_s(power), quiet):
-                break
-            if clock() >= end:
-                return False
-            if not said:
-                print(f"{time.strftime('%H:%M')} waiting for the phone to be awake, unlocked and untouched for "
-                      f"{quiet:g} s", flush=True)
-                said = True
-            sleep(30)
-        return True
+    def look() -> tuple[str, bool, float | None]:
+        power = android._read(serial, run_adb, WAKEFULNESS) or ""
+        return power, android.locked(serial, run_adb), android.idle_s(power)
+
+    def wait_for_phone(quiet: float = QUIET) -> str | None:
+        left = max(0.0, wait_unlock - (clock() - started))
+        return wait_ready(look, quiet=quiet, budget=left, sleep=sleep, clock=clock)
 
     port = _free_port()
     handler = partial(http.server.SimpleHTTPRequestHandler, directory=str(page.parent))
@@ -239,9 +287,9 @@ def run(page: Path, serial: str, *, package: str = "com.brave.browser", out: Pat
     rows: list[dict] | None = None
     try:
         for n in range(1, max(1, attempts) + 1):
-            if not wait_ready(QUIET if n == 1 else QUIET_AFTER_LOSS):
-                print("REFUSED: the phone is locked, asleep or off adb; it is never unlocked for the test "
-                      "(--wait-unlock waits)")
+            why = wait_for_phone(QUIET if n == 1 else QUIET_AFTER_LOSS)
+            if why is not None:
+                print(f"REFUSED: {why} (waited {wait_unlock:g} s, --wait-unlock waits longer)")
                 return 2
             print(f"{time.strftime('%H:%M')} the phone is awake, unlocked and idle: attempt {n}", flush=True)
             try:
