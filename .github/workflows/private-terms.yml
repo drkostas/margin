@@ -9,8 +9,8 @@ permissions:
 
 jobs:
   check:
-    # a repository whose jobs run on a runner of its own sets the RUNS_ON variable to its label
-    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    # this repository is public, so its jobs stay on a runner GitHub hosts and the label is named here
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
         with:
