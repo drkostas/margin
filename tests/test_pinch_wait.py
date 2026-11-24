@@ -1,6 +1,6 @@
 """The wait before a pinch test: which condition held it back, in words, and how often it looks.
 
-Every case here is the one that spent a reserved ten minutes on 24 Nov 2026. The phone was awake and
+Every case here is the one that lost a ten-minute window. The phone was awake and
 unlocked both times and the refusal said "the phone is locked, asleep or off adb", so the words were
 read as a lock and the real cause, a 13.7 s idle against a 60 s quiet window, took a reading of this
 module to find.
@@ -26,12 +26,12 @@ def test_why_not_ready_names_the_condition_that_failed():
     unread = P.why_not_ready(AWAKE, False, None)
     assert unread is not None and "last input cannot be read" in unread
 
-    # the case of 24 Nov 2026, with both numbers in the sentence
+    # the measured case, with both numbers in the sentence
     touched = P.why_not_ready(AWAKE, False, 13.675)
     assert touched is not None
     assert "13.7 s ago" in touched and "60 s of quiet" in touched
     # ⛔ by the phrase, never by the word: the sentence says "awake and unlocked", and "unlocked"
-    # holds "lock", which is the substring trap that has cost this estate several wrong counts
+    # holds "lock", which is the substring trap behind several wrong counts in tests like these
     assert "lock screen is up" not in touched and "asleep" not in touched
 
 
@@ -56,7 +56,7 @@ def _looker(readings):
     return look
 
 
-def _clock(step: float):
+def _clock():
     now = [0.0]
 
     def clock():
@@ -68,17 +68,17 @@ def _clock(step: float):
 
 
 def test_wait_ready_returns_none_once_the_phone_is_quiet():
-    clock, sleep = _clock(1.0)
+    clock, sleep = _clock()
     said: list[str] = []
     why = P.wait_ready(_looker([(AWAKE, False, 10.0), (AWAKE, False, 40.0), (AWAKE, False, 70.0)]),
                        budget=600.0, poll=5.0, say=said.append, sleep=sleep, clock=clock)
     assert why is None
-    assert said and "13" not in said[0]           # it says the reading it saw, not a fixed sentence
+    assert said and "13.7 s ago" not in said[0]   # by the phrase, since a bare "13" also matches the clock
     assert "10.0 s ago" in said[0]
 
 
 def test_the_refusal_carries_the_last_reading_rather_than_a_fixed_sentence():
-    clock, sleep = _clock(1.0)
+    clock, sleep = _clock()
     why = P.wait_ready(_looker([(AWAKE, False, 13.675)]), budget=120.0, poll=5.0,
                        say=lambda t: None, sleep=sleep, clock=clock)
     assert why is not None and "13.7 s ago" in why and "60 s of quiet" in why
@@ -87,7 +87,7 @@ def test_the_refusal_carries_the_last_reading_rather_than_a_fixed_sentence():
 def test_it_looks_more_often_than_the_quiet_window_it_waits_for():
     """A look every 30 s against a 60 s quiet window can miss the window by half a minute."""
     assert P.POLL < P.QUIET / 2
-    clock, sleep = _clock(1.0)
+    clock, sleep = _clock()
     looks: list[float] = []
 
     def look():
@@ -99,7 +99,7 @@ def test_it_looks_more_often_than_the_quiet_window_it_waits_for():
 
 
 def test_a_budget_of_zero_still_takes_one_look():
-    clock, sleep = _clock(1.0)
+    clock, sleep = _clock()
     assert P.wait_ready(_looker([(AWAKE, False, 90.0)]), budget=0.0, say=lambda t: None,
                         sleep=sleep, clock=clock) is None
     why = P.wait_ready(_looker([(ASLEEP, False, 90.0)]), budget=0.0, say=lambda t: None,
@@ -108,7 +108,7 @@ def test_a_budget_of_zero_still_takes_one_look():
 
 
 def test_the_waiting_line_is_said_again_while_it_waits_but_not_every_look():
-    clock, sleep = _clock(1.0)
+    clock, sleep = _clock()
     said: list[str] = []
     P.wait_ready(_looker([(AWAKE, False, 2.0)]), budget=300.0, poll=P.POLL, say=said.append,
                  sleep=sleep, clock=clock)

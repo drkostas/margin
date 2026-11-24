@@ -164,9 +164,9 @@ def why_not_ready(power: str, locked: bool, idle: float | None, quiet: float = Q
     """Pure. Why the phone cannot take the test now, in words, or None when it can.
 
     ⛔ IT NAMES THE CONDITION THAT FAILED, WITH ITS READING. The refusal used to say "the phone is
-    locked, asleep or off adb" whatever had failed. Twice inside one reserved ten minutes it said that
-    while the phone was awake and unlocked and the real failure was the quiet window, which spent the
-    reservation and took a reading of this module's own code to explain.
+    locked, asleep or off adb" whatever had failed. Twice inside one ten-minute window it said that
+    while the phone was awake and unlocked and the real failure was the quiet window, which lost the
+    window and took a reading of this module's own code to explain.
     """
     if "mWakefulness=Awake" not in (power or ""):
         return "the phone is asleep or off adb, since dumpsys power says no mWakefulness=Awake"
