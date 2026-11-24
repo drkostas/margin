@@ -21,7 +21,7 @@ Homepage = "https://github.com/drkostas/margin"
 margin = "margin.cli:main"
 
 [project.optional-dependencies]
-test = ["pytest>=8"]
+test = ["pytest>=8", "freezegun>=1.5"]        # freezegun pins the clock for the PIN_CLOCK run, see tests/conftest.py
 
 [tool.setuptools.packages.find]
 where = ["src"]

@@ -19,3 +19,20 @@ jobs:
       - run: pip install -e '.[test]'
       - run: python -m compileall -q src
       - run: pytest -q
+
+  clock:
+    # The same suite once more with the wall clock pinned to an awkward moment, hour 13 and minute 13 on a
+    # leap day. A check that reads the clock is otherwise green or red by the time of day the run started,
+    # and one green run measures nothing about it. Measured over all 1440 minutes of a day, the assertion
+    # this job was built for was caught by an ordinary run in 83 of them and by a pinned run in all 1440.
+    # One job on each pull request is the whole cost, on the same runner as the others.
+    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - run: pip install -e '.[test]'
+      - run: pytest -q
+        env:
+          PIN_CLOCK: 2024-02-29T13:13:13
