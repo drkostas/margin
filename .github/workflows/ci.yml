@@ -7,7 +7,8 @@ on:
 
 jobs:
   test:
-    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    # this repository is public, so its jobs stay on a runner GitHub hosts and the label is named here
+    runs-on: ubuntu-latest
     strategy:
       matrix:
         python: ["3.11", "3.12", "3.13"]
@@ -26,7 +27,7 @@ jobs:
     # and one green run measures nothing about it. Measured over all 1440 minutes of a day, the assertion
     # this job was built for was caught by an ordinary run in 83 of them and by a pinned run in all 1440.
     # One job on each pull request is the whole cost, on the same runner as the others.
-    runs-on: ${{ vars.RUNS_ON || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-python@v6
